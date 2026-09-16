@@ -39,6 +39,7 @@ let stateFired=false;
 let errorFired=false;
 let lastCommand="NONE";
 let listenSent=false;
+let isLive=null,bootstrapMuted=false,bootstrapComplete=false;
 
 function emit(type,extra={}){
   try{
@@ -58,6 +59,7 @@ function emit(type,extra={}){
       videoUrl:currentVideoId ? "https://www.youtube.com/watch?v="+currentVideoId : "",
       playerReady:ytReady,
       apiReady:ytReady,
+      isLive,
       ...extra
     },"*");
   }catch(_){}
@@ -79,8 +81,18 @@ function requestInfo(){
   command("getCurrentTime");
   command("getDuration");
   command("getPlayerState");
+  command("getVideoData");
 }
 
+function beginBootstrap(){
+  if(!ytWindow||bootstrapComplete||bootstrapMuted)return;
+  bootstrapMuted=true; command("mute"); command("playVideo");
+}
+function finishBootstrap(){
+  if(bootstrapComplete)return;
+  bootstrapComplete=true; bootstrapMuted=false;
+  command("pauseVideo"); command("unMute"); emit("BOOTSTRAP_READY");
+}
 function attachListeners(){
   if(!ytWindow||listenSent)return;
   listenSent=true;
@@ -95,7 +107,7 @@ function buildEmbed(id){
   currentVideoId=String(id||"").trim();
   if(!currentVideoId)return;
   ytReady=false; listenSent=false; state=-1; currentTime=0; duration=0; lastError=null;
-  stateFired=false; errorFired=false; loadCalled=true;
+  stateFired=false; errorFired=false; loadCalled=true; isLive=null; bootstrapMuted=false; bootstrapComplete=false;
 
   const p=new URLSearchParams({
     enablejsapi:"1",
@@ -125,6 +137,7 @@ function buildEmbed(id){
       ytPost({event:"listening",id:"tjkYoutube"});
       attachListeners();
       requestInfo();
+      if(tries===2)beginBootstrap();
       if(++tries>=20)clearInterval(t);
     },250);
   };
@@ -169,12 +182,16 @@ function handleYouTubeMessage(ev){
   if(m.event==="infoDelivery" && m.info){
     ytReady=true;
     const info=m.info;
+    const vd=info.videoData;
+    if(vd&&typeof vd.isLive==="boolean")isLive=vd.isLive;
+    else if(vd&&typeof vd.isLiveContent==="boolean")isLive=vd.isLiveContent;
     if(Number.isFinite(Number(info.currentTime)))currentTime=Number(info.currentTime);
     if(Number.isFinite(Number(info.duration)))duration=Number(info.duration);
     if(Number.isFinite(Number(info.playerState))){
       const next=Number(info.playerState);
       if(next!==state){state=next;stateFired=true;emit("STATE");}
     }
+    if(!bootstrapComplete&&duration>0)finishBootstrap();
     emit("TIME");
   }
 }
@@ -199,7 +216,7 @@ window.addEventListener("message",ev=>{
   }else if(m.command==="PLAY"){
     command("playVideo");
   }else if(m.command==="PAUSE"){
-    command("pauseVideo");
+    if(!bootstrapMuted)command("pauseVideo");
   }else if(m.command==="SEEK"){
     command("seekTo",[Math.max(0,Number(m.seconds)||0),true]);
   }else if(m.command==="GET_STATE"||m.command==="GET_TIME"){
@@ -216,6 +233,7 @@ setInterval(()=>{
     ytPost({event:"listening",id:"tjkYoutube"});
     attachListeners();
     requestInfo();
+    if(!bootstrapComplete&&!bootstrapMuted)beginBootstrap();
   }
   emit("TIME");
 },250);
