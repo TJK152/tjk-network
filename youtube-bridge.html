@@ -6,96 +6,219 @@
 <meta name="referrer" content="strict-origin-when-cross-origin">
 <title>TJK YouTube Bridge</title>
 <style>
-html,body,#player{margin:0;width:100%;height:100%;overflow:hidden;background:#000}
-#telemetry{position:absolute;left:12px;top:12px;z-index:99;display:none;background:rgba(0,0,0,.9);color:#fff;
-border:2px solid #007DFF;border-radius:8px;padding:10px;font:14px/1.35 monospace;white-space:pre-wrap}
+html,body,#host{margin:0;width:100%;height:100%;overflow:hidden;background:#000}
+iframe{position:absolute;inset:0;width:100%;height:100%;border:0;background:#000}
 </style>
 </head>
 <body>
-<div id="player"></div><div id="telemetry"></div>
+<div id="host"></div>
 <script>
 "use strict";
-let player=null,apiReady=false,playerReady=false;
-let pendingLoad=null,lastCommand="NONE",lastVideoId="",lastState=-1,lastError=null;
-let loadReceived=false,loadCalled=false,stateFired=false,errorFired=false;
 
-function send(type,extra={}){
-  let time=0,duration=0,videoUrl="",videoData=null;
-  try{if(player){time=Number(player.getCurrentTime())||0;duration=Number(player.getDuration())||0;
-    videoUrl=String(player.getVideoUrl&&player.getVideoUrl()||"");
-    videoData=player.getVideoData&&player.getVideoData()||null;}}catch(_){}
-  const payload={tjkYoutubeBridge:true,type,state:lastState,time,duration,error:lastError,
-    loadReceived,loadCalled,stateFired,errorFired,lastCommand,videoId:lastVideoId,videoUrl,videoData,
-    playerReady,apiReady,...extra};
-  try{parent.postMessage(payload,"*")}catch(_){}
-  render(payload);
-}
-function render(p){
-  if(new URLSearchParams(location.search).get("debug")!=="1")return;
-  const el=document.getElementById("telemetry"); el.style.display="block";
-  el.textContent="TJK YOUTUBE BRIDGE\n"+
-    "API ready: "+p.apiReady+"\nPlayer ready: "+p.playerReady+
-    "\nLOAD received: "+p.loadReceived+"\nloadVideoById called: "+p.loadCalled+
-    "\nVideo ID: "+p.videoId+"\nState: "+p.state+
-    "\nDuration: "+p.duration+"\nTime: "+p.time+
-    "\nError: "+p.error+"\nLast command: "+p.lastCommand;
-}
-function doLoad(id){
-  id=String(id||"").trim(); if(!id)return;
-  lastVideoId=id; loadCalled=true; lastCommand="LOAD";
+/*
+  TJK HTTPS YouTube bridge — no iframe_api script.
+
+  OBS successfully loads this HTTPS page, but its nested environment did not
+  initialize https://www.youtube.com/iframe_api. This version talks directly
+  to an enablejsapi=1 YouTube embed using YouTube's iframe postMessage
+  protocol, removing that failed script-loader dependency.
+*/
+
+const ORIGIN=location.origin;
+let ytFrame=null;
+let ytWindow=null;
+let currentVideoId="";
+let ytReady=false;
+let state=-1;
+let currentTime=0;
+let duration=0;
+let lastError=null;
+let loadReceived=false;
+let loadCalled=false;
+let stateFired=false;
+let errorFired=false;
+let lastCommand="NONE";
+let listenSent=false;
+
+function emit(type,extra={}){
   try{
-    // Use loadVideoById so the media pipeline actually initializes.
-    player.loadVideoById({videoId:id,startSeconds:0});
-    send("LOAD_CALLED");
-  }catch(e){lastError="LOAD_EXCEPTION: "+e.message;send("ERROR",{error:lastError});}
+    parent.postMessage({
+      tjkYoutubeBridge:true,
+      type,
+      state,
+      time:currentTime,
+      duration,
+      error:lastError,
+      loadReceived,
+      loadCalled,
+      stateFired,
+      errorFired,
+      lastCommand,
+      videoId:currentVideoId,
+      videoUrl:currentVideoId ? "https://www.youtube.com/watch?v="+currentVideoId : "",
+      playerReady:ytReady,
+      apiReady:ytReady,
+      ...extra
+    },"*");
+  }catch(_){}
 }
-window.onYouTubeIframeAPIReady=()=>{
-  apiReady=true;
-  player=new YT.Player("player",{
-    width:"100%",height:"100%",
-    playerVars:{autoplay:0,controls:0,playsinline:1,rel:0,modestbranding:1,cc_load_policy:0,iv_load_policy:3,fs:0},
-    events:{
-      onReady:()=>{
-        playerReady=true; send("READY");
-        if(pendingLoad){const id=pendingLoad;pendingLoad=null;doLoad(id);}
-      },
-      onStateChange:e=>{
-        stateFired=true;lastState=Number(e.data);
-        // The bridge bootstrap may start media only to initialize metadata.
-        // Pause immediately once duration becomes usable; local OBS master decides final seek/play.
-        let d=0;try{d=Number(player.getDuration())||0}catch(_){}
-        if(loadCalled && d>0 && (lastState===1 || lastState===3 || lastState===5)){
-          try{player.pauseVideo()}catch(_){}
-        }
-        send("STATE");
-      },
-      onError:e=>{errorFired=true;lastError=Number(e.data);send("ERROR");}
-    }
+
+function ytPost(obj){
+  if(!ytWindow)return;
+  try{ytWindow.postMessage(JSON.stringify(obj),"https://www.youtube.com");}catch(_){
+    try{ytWindow.postMessage(JSON.stringify(obj),"*");}catch(__){}
+  }
+}
+
+function command(func,args=[]){
+  ytPost({event:"command",func,args});
+}
+
+function requestInfo(){
+  // These commands cause infoDelivery updates on supported YouTube embeds.
+  command("getCurrentTime");
+  command("getDuration");
+  command("getPlayerState");
+}
+
+function attachListeners(){
+  if(!ytWindow||listenSent)return;
+  listenSent=true;
+  ["onReady","onStateChange","onError","onPlaybackQualityChange"].forEach(event=>{
+    ytPost({event:"command",func:"addEventListener",args:[event]});
   });
-};
+  // YouTube's iframe protocol uses this handshake for API communication.
+  ytPost({event:"listening",id:"tjkYoutube"});
+}
+
+function buildEmbed(id){
+  currentVideoId=String(id||"").trim();
+  if(!currentVideoId)return;
+  ytReady=false; listenSent=false; state=-1; currentTime=0; duration=0; lastError=null;
+  stateFired=false; errorFired=false; loadCalled=true;
+
+  const p=new URLSearchParams({
+    enablejsapi:"1",
+    autoplay:"1",
+    controls:"0",
+    playsinline:"1",
+    rel:"0",
+    modestbranding:"1",
+    cc_load_policy:"0",
+    iv_load_policy:"3",
+    fs:"0",
+    origin:ORIGIN
+  });
+
+  const f=document.createElement("iframe");
+  f.id="youtube";
+  f.allow="autoplay; encrypted-media; picture-in-picture";
+  f.referrerPolicy="strict-origin-when-cross-origin";
+  f.src="https://www.youtube.com/embed/"+encodeURIComponent(currentVideoId)+"?"+p.toString();
+  f.onload=()=>{
+    ytWindow=f.contentWindow;
+    // Repeat handshake because the player may not accept the first packet
+    // until its internal JS has finished booting.
+    let tries=0;
+    const t=setInterval(()=>{
+      if(!ytFrame||ytFrame!==f){clearInterval(t);return}
+      ytPost({event:"listening",id:"tjkYoutube"});
+      attachListeners();
+      requestInfo();
+      if(++tries>=20)clearInterval(t);
+    },250);
+  };
+  const host=document.getElementById("host");
+  host.innerHTML="";
+  host.appendChild(f);
+  ytFrame=f;
+  ytWindow=f.contentWindow;
+  emit("LOAD_CALLED");
+}
+
+function handleYouTubeMessage(ev){
+  if(!ytWindow||ev.source!==ytWindow)return;
+  let m=ev.data;
+  try{if(typeof m==="string")m=JSON.parse(m)}catch(_){return}
+  if(!m||typeof m!=="object")return;
+
+  if(m.event==="onReady"){
+    ytReady=true;
+    emit("READY");
+    requestInfo();
+    return;
+  }
+
+  if(m.event==="onStateChange"){
+    ytReady=true;
+    stateFired=true;
+    state=Number(m.info);
+    emit("STATE");
+    requestInfo();
+    return;
+  }
+
+  if(m.event==="onError"){
+    ytReady=true;
+    errorFired=true;
+    lastError=m.info;
+    emit("ERROR");
+    return;
+  }
+
+  if(m.event==="infoDelivery" && m.info){
+    ytReady=true;
+    const info=m.info;
+    if(Number.isFinite(Number(info.currentTime)))currentTime=Number(info.currentTime);
+    if(Number.isFinite(Number(info.duration)))duration=Number(info.duration);
+    if(Number.isFinite(Number(info.playerState))){
+      const next=Number(info.playerState);
+      if(next!==state){state=next;stateFired=true;emit("STATE");}
+    }
+    emit("TIME");
+  }
+}
+
 window.addEventListener("message",ev=>{
+  // Messages from the YouTube child iframe.
+  if(ytWindow && ev.source===ytWindow){
+    handleYouTubeMessage(ev);
+    return;
+  }
+
+  // Commands from the local OBS parent.
   const m=ev.data;
   if(!m||m.tjkYoutubeBridge!==true||!m.command)return;
   lastCommand=String(m.command);
+
   if(m.command==="LOAD"){
-    loadReceived=true;lastVideoId=String(m.videoId||"");send("LOAD_RECEIVED");
-    if(playerReady)doLoad(lastVideoId); else pendingLoad=lastVideoId;
-  }else if(m.command==="PLAY"){try{player.playVideo()}catch(_){}}
-  else if(m.command==="PAUSE"){try{player.pauseVideo()}catch(_){}}
-  else if(m.command==="SEEK"){try{player.seekTo(Math.max(0,Number(m.seconds)||0),true)}catch(_){}}
-  else if(m.command==="GET_STATE"||m.command==="GET_TIME"){send("SNAPSHOT");}
-});
-setInterval(()=>{
-  // If metadata appears without a state callback, freeze bootstrap and report it.
-  if(playerReady){
-    let d=0;try{d=Number(player.getDuration())||0}catch(_){}
-    if(loadCalled && d>0 && lastState===1){try{player.pauseVideo()}catch(_){}}
+    loadReceived=true;
+    currentVideoId=String(m.videoId||"").trim();
+    emit("LOAD_RECEIVED");
+    buildEmbed(currentVideoId);
+  }else if(m.command==="PLAY"){
+    command("playVideo");
+  }else if(m.command==="PAUSE"){
+    command("pauseVideo");
+  }else if(m.command==="SEEK"){
+    command("seekTo",[Math.max(0,Number(m.seconds)||0),true]);
+  }else if(m.command==="GET_STATE"||m.command==="GET_TIME"){
+    requestInfo();
   }
-  send("TIME");
+});
+
+// The local player waits for bridge READY before sending LOAD. This READY is
+// bridge-document readiness, not YouTube readiness.
+emit("READY");
+
+setInterval(()=>{
+  if(ytWindow){
+    ytPost({event:"listening",id:"tjkYoutube"});
+    attachListeners();
+    requestInfo();
+  }
+  emit("TIME");
 },250);
-const s=document.createElement("script");
-s.src="https://www.youtube.com/iframe_api";
-document.head.appendChild(s);
 </script>
 </body>
 </html>
