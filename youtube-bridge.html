@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="referrer" content="strict-origin-when-cross-origin">
+<title>TJK NETWORK YouTube Bridge</title>
+<style>
+html,body,#player{margin:0;width:100%;height:100%;overflow:hidden;background:#000}
+#player{position:fixed;inset:0}
+#player iframe{width:100%!important;height:100%!important;border:0}
+#test{position:fixed;left:12px;right:12px;bottom:12px;z-index:5;padding:10px;background:rgba(0,0,0,.82);color:#fff;font:13px Arial;border-radius:9px}
+#row{display:flex;gap:7px;flex-wrap:wrap} input,button{font:700 14px Arial;padding:8px} #input{flex:1;min-width:260px}
+#status{margin-top:7px;white-space:pre-wrap;font-family:monospace}.embedded #test{display:none}
+</style>
+</head>
+<body>
+<div id="player"></div>
+<div id="test"><div id="row"><input id="input" placeholder="YouTube URL or video ID"><button id="load">LOAD</button><button id="play">PLAY</button><button id="pause">PAUSE</button><button id="back">SEEK -30s</button></div><div id="status">Loading YouTube API…</div></div>
+<script>
+"use strict";
+const embedded=parent!==window;if(embedded)document.body.classList.add("embedded");
+let player=null,ready=false,lastError=null,timer=null;
+const status=document.getElementById("status");
+function parseId(v){const s=String(v||"").trim();if(/^[A-Za-z0-9_-]{11}$/.test(s))return s;try{const u=new URL(s);if(u.hostname.includes("youtu.be"))return u.pathname.split("/").filter(Boolean)[0]||"";if(u.searchParams.get("v"))return u.searchParams.get("v")||"";const p=u.pathname.split("/").filter(Boolean),i=p.findIndex(x=>["embed","live","shorts"].includes(x));if(i>=0&&p[i+1])return p[i+1]}catch(_){}return ""}
+function snap(){let state=-1,time=0,duration=0;try{if(player){state=player.getPlayerState();time=Number(player.getCurrentTime())||0;duration=Number(player.getDuration())||0}}catch(_){}return{state,time,duration,error:lastError}}
+function emit(type,extra={}){const m={tjkYoutubeBridge:true,type,...snap(),...extra};if(embedded)parent.postMessage(m,"*");status.textContent=JSON.stringify(m,null,2)}
+function load(v){const id=parseId(v);if(!id){emit("ERROR",{error:"INVALID_VIDEO_ID"});return}lastError=null;if(ready)player.loadVideoById(id)}
+function command(m){if(!m||m.tjkYoutubeBridge!==true)return;const c=String(m.command||"").toUpperCase();try{if(c==="LOAD")load(m.videoId||m.url);else if(c==="PLAY"&&player)player.playVideo();else if(c==="PAUSE"&&player)player.pauseVideo();else if(c==="SEEK"&&player)player.seekTo(Math.max(0,Number(m.seconds)||0),true);else if(["GET_STATE","GET_TIME"].includes(c))emit("STATE")}catch(e){emit("ERROR",{error:String(e&&e.message||e)})}}
+addEventListener("message",e=>command(e.data));
+window.onYouTubeIframeAPIReady=()=>{player=new YT.Player("player",{width:"100%",height:"100%",playerVars:{autoplay:0,controls:0,playsinline:1,rel:0},events:{onReady:()=>{ready=true;emit("READY");timer=setInterval(()=>emit("TIME"),500)},onStateChange:e=>emit("STATE",{state:e.data}),onError:e=>{lastError=Number(e.data);emit("ERROR",{error:lastError})}}})};
+const s=document.createElement("script");s.src="https://www.youtube.com/iframe_api";document.head.appendChild(s);
+document.getElementById("load").onclick=()=>load(document.getElementById("input").value);
+document.getElementById("play").onclick=()=>command({tjkYoutubeBridge:true,command:"PLAY"});
+document.getElementById("pause").onclick=()=>command({tjkYoutubeBridge:true,command:"PAUSE"});
+document.getElementById("back").onclick=()=>{const x=snap();command({tjkYoutubeBridge:true,command:"SEEK",seconds:Math.max(0,x.time-30)})};
+addEventListener("beforeunload",()=>{if(timer)clearInterval(timer)});
+</script>
+</body></html>
