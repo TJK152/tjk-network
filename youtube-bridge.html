@@ -93,6 +93,14 @@ function beginBootstrap(){
   if(!ytWindow||bootstrapComplete||bootstrapMuted)return;
   bootstrapMuted=true; command("mute"); command("playVideo");
 }
+function forceCaptionsOff(){
+  // Disable both known YouTube caption modules and clear any selected track.
+  command("unloadModule",["captions"]);
+  command("unloadModule",["cc"]);
+  command("setOption",["captions","track",{}]);
+  command("setOption",["cc","track",{}]);
+}
+
 function applyDesiredAudio(){
   command("setVolume",[Math.max(0,Math.min(100,Number(desiredVolume)||0))]);
   command(desiredMuted?"mute":"unMute");
@@ -128,6 +136,7 @@ function buildEmbed(id){
     rel:"0",
     modestbranding:"1",
     cc_load_policy:"0",
+    cc_lang_pref:"",
     iv_load_policy:"3",
     fs:"0",
     origin:ORIGIN
@@ -249,6 +258,8 @@ window.addEventListener("message",ev=>{
     if(!bootstrapMuted)command("pauseVideo");
   }else if(m.command==="SEEK"){
     if(!streamEnded&&!videoEnded)command("seekTo",[Math.max(0,Number(m.seconds)||0),true]);
+  }else if(m.command==="CAPTIONS_OFF"){
+    forceCaptionsOff();
   }else if(m.command==="SET_VOLUME"){
     desiredVolume=Math.max(0,Math.min(100,Number(m.volume)||0));
     command("setVolume",[desiredVolume]);
