@@ -39,7 +39,7 @@ let stateFired=false;
 let errorFired=false;
 let lastCommand="NONE";
 let listenSent=false;
-let isLive=null,bootstrapMuted=false,bootstrapComplete=false;
+let isLive=null,bootstrapMuted=false,bootstrapComplete=false,streamEnded=false,endReason="",videoEnded=false;
 
 function emit(type,extra={}){
   try{
@@ -60,6 +60,9 @@ function emit(type,extra={}){
       playerReady:ytReady,
       apiReady:ytReady,
       isLive,
+      streamEnded,
+      endReason,
+      videoEnded,
       ...extra
     },"*");
   }catch(_){}
@@ -107,7 +110,7 @@ function buildEmbed(id){
   currentVideoId=String(id||"").trim();
   if(!currentVideoId)return;
   ytReady=false; listenSent=false; state=-1; currentTime=0; duration=0; lastError=null;
-  stateFired=false; errorFired=false; loadCalled=true; isLive=null; bootstrapMuted=false; bootstrapComplete=false;
+  stateFired=false; errorFired=false; loadCalled=true; isLive=null; bootstrapMuted=false; bootstrapComplete=false; streamEnded=false; endReason=""; videoEnded=false;
 
   const p=new URLSearchParams({
     enablejsapi:"1",
@@ -166,6 +169,19 @@ function handleYouTubeMessage(ev){
     ytReady=true;
     stateFired=true;
     state=Number(m.info);
+    if(state===0 && isLive===true){
+      streamEnded=true;
+      endReason="YouTube live player entered ENDED state";
+      command("pauseVideo");
+      emit("ENDED");
+      return;
+    }
+    if(state===0 && isLive===false){
+      videoEnded=true;
+      command("pauseVideo");
+      emit("VIDEO_ENDED");
+      return;
+    }
     emit("STATE");
     requestInfo();
     return;
@@ -185,6 +201,12 @@ function handleYouTubeMessage(ev){
     const vd=info.videoData;
     if(vd&&typeof vd.isLive==="boolean")isLive=vd.isLive;
     else if(vd&&typeof vd.isLiveContent==="boolean")isLive=vd.isLiveContent;
+    if(isLive===true && state===0 && !streamEnded){
+      streamEnded=true;
+      endReason="YouTube live metadata confirmed after ENDED state";
+      command("pauseVideo");
+      emit("ENDED");
+    }
     if(Number.isFinite(Number(info.currentTime)))currentTime=Number(info.currentTime);
     if(Number.isFinite(Number(info.duration)))duration=Number(info.duration);
     if(Number.isFinite(Number(info.playerState))){
@@ -214,11 +236,11 @@ window.addEventListener("message",ev=>{
     emit("LOAD_RECEIVED");
     buildEmbed(currentVideoId);
   }else if(m.command==="PLAY"){
-    command("playVideo");
+    if(!streamEnded)command("playVideo");
   }else if(m.command==="PAUSE"){
     if(!bootstrapMuted)command("pauseVideo");
   }else if(m.command==="SEEK"){
-    command("seekTo",[Math.max(0,Number(m.seconds)||0),true]);
+    if(!streamEnded)command("seekTo",[Math.max(0,Number(m.seconds)||0),true]);
   }else if(m.command==="GET_STATE"||m.command==="GET_TIME"){
     requestInfo();
   }
