@@ -40,6 +40,8 @@ let errorFired=false;
 let lastCommand="NONE";
 let listenSent=false;
 let isLive=null,bootstrapMuted=false,bootstrapComplete=false,streamEnded=false,endReason="",videoEnded=false;
+let desiredVolume=100;
+let desiredMuted=false;
 
 function emit(type,extra={}){
   try{
@@ -91,10 +93,16 @@ function beginBootstrap(){
   if(!ytWindow||bootstrapComplete||bootstrapMuted)return;
   bootstrapMuted=true; command("mute"); command("playVideo");
 }
+function applyDesiredAudio(){
+  command("setVolume",[Math.max(0,Math.min(100,Number(desiredVolume)||0))]);
+  command(desiredMuted?"mute":"unMute");
+}
 function finishBootstrap(){
   if(bootstrapComplete)return;
   bootstrapComplete=true; bootstrapMuted=false;
-  command("pauseVideo"); command("unMute"); emit("BOOTSTRAP_READY");
+  command("pauseVideo");
+  applyDesiredAudio();
+  emit("BOOTSTRAP_READY");
 }
 function attachListeners(){
   if(!ytWindow||listenSent)return;
@@ -236,11 +244,22 @@ window.addEventListener("message",ev=>{
     emit("LOAD_RECEIVED");
     buildEmbed(currentVideoId);
   }else if(m.command==="PLAY"){
-    if(!streamEnded)command("playVideo");
+    if(!streamEnded&&!videoEnded)command("playVideo");
   }else if(m.command==="PAUSE"){
     if(!bootstrapMuted)command("pauseVideo");
   }else if(m.command==="SEEK"){
-    if(!streamEnded)command("seekTo",[Math.max(0,Number(m.seconds)||0),true]);
+    if(!streamEnded&&!videoEnded)command("seekTo",[Math.max(0,Number(m.seconds)||0),true]);
+  }else if(m.command==="SET_VOLUME"){
+    desiredVolume=Math.max(0,Math.min(100,Number(m.volume)||0));
+    command("setVolume",[desiredVolume]);
+    if(desiredMuted)command("mute");
+  }else if(m.command==="MUTE"){
+    desiredMuted=true;
+    command("mute");
+  }else if(m.command==="UNMUTE"){
+    desiredMuted=false;
+    command("setVolume",[desiredVolume]);
+    command("unMute");
   }else if(m.command==="GET_STATE"||m.command==="GET_TIME"){
     requestInfo();
   }
