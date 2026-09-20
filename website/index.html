@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>TJK152 Wrapper Test</title>
+<title>TJK NETWORK</title>
 <style>
 html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#000}
 #websiteFrame{position:absolute;inset:0;width:100%;height:100%;border:0;display:block}
@@ -13,12 +13,17 @@ html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#000}
 <iframe id="websiteFrame" allow="autoplay; fullscreen" allowfullscreen></iframe>
 <script>
 (() => {
-  const SITE_ORIGIN = "https://www.tjk152.com";
+  const WIX_ORIGIN = "https://www.tjk152.com";
+  const GITHUB_BASE = "/tjk-network/website";
   const frame = document.getElementById("websiteFrame");
-  const params = new URLSearchParams(window.location.search);
-  let path = params.get("path") || "/";
+
+  let path = location.pathname || "/";
+  if (path === GITHUB_BASE || path === GITHUB_BASE + "/") path = "/";
+  else if (path.startsWith(GITHUB_BASE + "/")) path = path.slice(GITHUB_BASE.length);
+  else path = "/";
+
   if (!path.startsWith("/")) path = "/" + path;
-  frame.src = SITE_ORIGIN + path;
+  frame.src = WIX_ORIGIN + path + (location.search || "");
 })();
 </script>
 </body>
