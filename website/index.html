@@ -2,35 +2,59 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+
+    <meta
+        name="viewport"
+        content="width=device-width, initial-scale=1.0, viewport-fit=cover"
+    >
+
     <title>TJK NETWORK</title>
 
     <style>
+        /* =========================================================
+           PAGE
+           ========================================================= */
+
         html,
         body {
             margin: 0;
+
             width: 100%;
             height: 100%;
+
             overflow: hidden;
+
             background: #000;
         }
 
+
+        /* =========================================================
+           WEBSITE FRAME
+           ========================================================= */
+
         #websiteFrame {
             position: absolute;
+
             top: 0;
             left: 0;
+
             width: 100%;
             height: 100%;
+
             margin: 0;
             padding: 0;
+
             border: 0;
+
             display: block;
+
             transform-origin: top left;
         }
     </style>
 </head>
 
 <body>
+
     <iframe
         id="websiteFrame"
         title="TJK NETWORK"
@@ -38,66 +62,281 @@
         allowfullscreen>
     </iframe>
 
+
     <script>
         (() => {
             /* =====================================================
                CONFIGURATION
                ===================================================== */
 
-            // Current paid site used during testing.
-            const WIX_ORIGIN = "https://www.tjk152.com";
+            // Current paid TJK NETWORK website.
+            const WEBSITE_ORIGIN =
+                "https://www.tjk152.com";
+
+            // GitHub Pages project base.
+            const GITHUB_PROJECT_BASE =
+                "/tjk-network";
 
             // Wix mobile editor canvas width.
-            const WIX_MOBILE_WIDTH = 320;
-            const MOBILE_BREAKPOINT = 768;
+            const WIX_MOBILE_WIDTH =
+                320;
 
-            const frame = document.getElementById("websiteFrame");
+            // Maximum width where the portrait mobile patch applies.
+            const MOBILE_BREAKPOINT =
+                768;
 
 
             /* =====================================================
-               MOBILE PAGE PATCH
+               ELEMENTS
                ===================================================== */
 
-            function applyResponsiveFrame() {
-                const viewportWidth = window.innerWidth;
-                const viewportHeight = window.innerHeight;
+            const websiteFrame =
+                document.getElementById("websiteFrame");
 
-                if (viewportWidth <= MOBILE_BREAKPOINT) {
-                    const scale = viewportWidth / WIX_MOBILE_WIDTH;
 
-                    frame.style.top = "0";
-                    frame.style.left = "0";
-                    frame.style.width = WIX_MOBILE_WIDTH + "px";
-                    frame.style.height = (viewportHeight / scale) + "px";
-                    frame.style.transformOrigin = "top left";
-                    frame.style.transform = `scale(${scale})`;
-                    return;
+            /* =====================================================
+               PAGE ROUTING
+               ===================================================== */
+
+            function getWebsitePath() {
+                let path =
+                    window.location.pathname || "/";
+
+
+                /*
+                 * Repository homepage:
+                 *
+                 * /tjk-network
+                 * /tjk-network/
+                 *
+                 * becomes:
+                 *
+                 * /
+                 */
+
+                if (
+                    path === GITHUB_PROJECT_BASE ||
+                    path === GITHUB_PROJECT_BASE + "/"
+                ) {
+                    return "/";
                 }
 
-                frame.style.top = "0";
-                frame.style.left = "0";
-                frame.style.width = "100%";
-                frame.style.height = "100%";
-                frame.style.transform = "none";
+
+                /*
+                 * Generic page routing.
+                 *
+                 * Examples:
+                 *
+                 * /tjk-network/shop
+                 *      -> /shop
+                 *
+                 * /tjk-network/about
+                 *      -> /about
+                 *
+                 * /tjk-network/schedule
+                 *      -> /schedule
+                 *
+                 * /tjk-network/anything/else
+                 *      -> /anything/else
+                 */
+
+                if (
+                    path.startsWith(
+                        GITHUB_PROJECT_BASE + "/"
+                    )
+                ) {
+                    path =
+                        path.slice(
+                            GITHUB_PROJECT_BASE.length
+                        );
+                }
+
+
+                /*
+                 * Always return a normal absolute website path.
+                 */
+
+                if (!path.startsWith("/")) {
+                    path = "/" + path;
+                }
+
+                return path;
             }
 
 
             /* =====================================================
-               LOAD HOMEPAGE
+               RESPONSIVE WEBSITE FRAME
                ===================================================== */
 
-            frame.src = WIX_ORIGIN + "/";
+            function applyResponsiveFrame() {
+                const viewportWidth =
+                    window.innerWidth;
+
+                const viewportHeight =
+                    window.innerHeight;
+
+
+                /*
+                 * PORTRAIT MOBILE
+                 *
+                 * Wix's mobile editor uses a 320px canvas.
+                 *
+                 * Keep the iframe's internal viewport at 320px,
+                 * then scale the finished page to exactly fill
+                 * the phone's physical viewport width.
+                 */
+
+                const isPortraitMobile =
+                    viewportWidth <= MOBILE_BREAKPOINT &&
+                    viewportHeight >= viewportWidth;
+
+
+                if (isPortraitMobile) {
+                    const scale =
+                        viewportWidth /
+                        WIX_MOBILE_WIDTH;
+
+
+                    websiteFrame.style.top =
+                        "0";
+
+                    websiteFrame.style.left =
+                        "0";
+
+                    websiteFrame.style.width =
+                        WIX_MOBILE_WIDTH + "px";
+
+
+                    /*
+                     * Compensate for the transform vertically so
+                     * the iframe still fills the visible screen.
+                     */
+
+                    websiteFrame.style.height =
+                        (
+                            viewportHeight /
+                            scale
+                        ) + "px";
+
+
+                    websiteFrame.style.transformOrigin =
+                        "top left";
+
+                    websiteFrame.style.transform =
+                        `scale(${scale})`;
+
+                    return;
+                }
+
+
+                /*
+                 * LANDSCAPE PHONE / TABLET / DESKTOP
+                 *
+                 * Do not apply the 320px mobile scaling.
+                 *
+                 * Wix receives the full browser viewport and
+                 * handles its normal responsive layout.
+                 */
+
+                websiteFrame.style.top =
+                    "0";
+
+                websiteFrame.style.left =
+                    "0";
+
+                websiteFrame.style.width =
+                    "100%";
+
+                websiteFrame.style.height =
+                    "100%";
+
+                websiteFrame.style.transform =
+                    "none";
+            }
+
+
+            /* =====================================================
+               RESPONSIVE UPDATE SCHEDULER
+               ===================================================== */
+
+            function scheduleResponsiveUpdate() {
+                /*
+                 * Two animation frames allow the browser's viewport
+                 * dimensions to settle before recalculating.
+                 */
+
+                requestAnimationFrame(() => {
+                    requestAnimationFrame(
+                        applyResponsiveFrame
+                    );
+                });
+            }
+
+
+            /* =====================================================
+               WEBSITE LOADING
+               ===================================================== */
+
+            function loadWebsite() {
+                const websitePath =
+                    getWebsitePath();
+
+                const queryString =
+                    window.location.search || "";
+
+
+                websiteFrame.src =
+                    WEBSITE_ORIGIN +
+                    websitePath +
+                    queryString;
+            }
+
+
+            /* =====================================================
+               INITIALIZATION
+               ===================================================== */
 
             applyResponsiveFrame();
 
-            window.addEventListener("resize", applyResponsiveFrame);
+            loadWebsite();
 
-            window.addEventListener("orientationchange", () => {
-                requestAnimationFrame(() => {
-                    requestAnimationFrame(applyResponsiveFrame);
-                });
-            });
+
+            /* =====================================================
+               VIEWPORT EVENTS
+               ===================================================== */
+
+            window.addEventListener(
+                "resize",
+                scheduleResponsiveUpdate
+            );
+
+
+            window.addEventListener(
+                "orientationchange",
+                () => {
+                    /*
+                     * Mobile Safari can briefly report the old
+                     * viewport dimensions during rotation.
+                     *
+                     * Run an immediate scheduled update and two
+                     * delayed confirmations after the rotation.
+                     */
+
+                    scheduleResponsiveUpdate();
+
+                    setTimeout(
+                        applyResponsiveFrame,
+                        150
+                    );
+
+                    setTimeout(
+                        applyResponsiveFrame,
+                        350
+                    );
+                }
+            );
         })();
     </script>
+
 </body>
 </html>
