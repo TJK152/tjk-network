@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TJK152 Wrapper Test</title>
+<style>
+html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#000}
+#websiteFrame{position:absolute;inset:0;width:100%;height:100%;border:0;display:block}
+</style>
+</head>
+<body>
+<iframe id="websiteFrame" allow="autoplay; fullscreen" allowfullscreen></iframe>
+<script>
+(() => {
+  const SITE_ORIGIN = "https://www.tjk152.com";
+  const frame = document.getElementById("websiteFrame");
+  const params = new URLSearchParams(window.location.search);
+  let path = params.get("path") || "/";
+  if (!path.startsWith("/")) path = "/" + path;
+  frame.src = SITE_ORIGIN + path;
+})();
+</script>
+</body>
+</html>
