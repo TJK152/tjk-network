@@ -81,7 +81,7 @@
             const WIX_MOBILE_WIDTH =
                 320;
 
-            // Maximum width where the portrait mobile patch applies.
+            // Portrait mobile breakpoint.
             const MOBILE_BREAKPOINT =
                 768;
 
@@ -125,16 +125,11 @@
                 /*
                  * Generic page routing.
                  *
-                 * Examples:
-                 *
                  * /tjk-network/shop
                  *      -> /shop
                  *
                  * /tjk-network/about
                  *      -> /about
-                 *
-                 * /tjk-network/schedule
-                 *      -> /schedule
                  *
                  * /tjk-network/anything/else
                  *      -> /anything/else
@@ -152,23 +147,119 @@
                 }
 
 
-                /*
-                 * Always return a normal absolute website path.
-                 */
-
                 if (!path.startsWith("/")) {
-                    path = "/" + path;
+                    path =
+                        "/" + path;
                 }
+
 
                 return path;
             }
 
 
             /* =====================================================
-               RESPONSIVE WEBSITE FRAME
+               ORIENTATION DETECTION
                ===================================================== */
 
-            function applyResponsiveFrame() {
+            function isLandscapePhone() {
+                /*
+                 * Do not use only "width <= 768".
+                 *
+                 * A modern phone in landscape can be wider than
+                 * 768 CSS pixels, which caused the previous patch
+                 * to fall into the desktop behavior.
+                 *
+                 * The short viewport height is the useful signal
+                 * here: landscape phones are wide but shallow.
+                 */
+
+                return (
+                    window.innerWidth >
+                    window.innerHeight
+                ) && (
+                    window.innerHeight <=
+                    MOBILE_BREAKPOINT
+                );
+            }
+
+
+            function isPortraitPhone() {
+                return (
+                    window.innerHeight >=
+                    window.innerWidth
+                ) && (
+                    window.innerWidth <=
+                    MOBILE_BREAKPOINT
+                );
+            }
+
+
+            /* =====================================================
+               FRAME MODES
+               ===================================================== */
+
+            function applyPortraitMobileFrame() {
+                const viewportWidth =
+                    window.innerWidth;
+
+                const viewportHeight =
+                    window.innerHeight;
+
+                /*
+                 * Wix's portrait mobile canvas is 320px wide.
+                 *
+                 * Keep Wix rendering internally at 320px and scale
+                 * that completed layout to the phone's full width.
+                 */
+
+                const scale =
+                    viewportWidth /
+                    WIX_MOBILE_WIDTH;
+
+
+                websiteFrame.style.top =
+                    "0";
+
+                websiteFrame.style.left =
+                    "0";
+
+                websiteFrame.style.width =
+                    WIX_MOBILE_WIDTH + "px";
+
+                websiteFrame.style.height =
+                    (
+                        viewportHeight /
+                        scale
+                    ) + "px";
+
+                websiteFrame.style.transformOrigin =
+                    "top left";
+
+                websiteFrame.style.transform =
+                    `scale(${scale})`;
+            }
+
+
+            function applyLandscapeMobileFrame() {
+                /*
+                 * LANDSCAPE PHONE
+                 *
+                 * The previous version removed the 320px transform
+                 * and gave Wix the full landscape iframe width.
+                 *
+                 * Wix continued serving its centered mobile canvas,
+                 * which left large black side areas.
+                 *
+                 * Instead, keep Wix's 320px mobile viewport but scale
+                 * it according to the LANDSCAPE VIEWPORT HEIGHT.
+                 *
+                 * This prevents the page from being blown up to the
+                 * entire long edge of the phone while still making
+                 * the mobile page fill the available height.
+                 *
+                 * The scaled page is horizontally centered.
+                 */
+
                 const viewportWidth =
                     window.innerWidth;
 
@@ -177,65 +268,60 @@
 
 
                 /*
-                 * PORTRAIT MOBILE
+                 * Use the portrait canvas as the stable Wix viewport.
                  *
-                 * Wix's mobile editor uses a 320px canvas.
+                 * A landscape phone's usable height is the limiting
+                 * dimension, so derive a conservative scale from it.
                  *
-                 * Keep the iframe's internal viewport at 320px,
-                 * then scale the finished page to exactly fill
-                 * the phone's physical viewport width.
+                 * 568px is used as the reference visible height for
+                 * the 320px Wix mobile canvas. This keeps the page
+                 * readable without the oversized portrait-style zoom.
                  */
 
-                const isPortraitMobile =
-                    viewportWidth <= MOBILE_BREAKPOINT &&
-                    viewportHeight >= viewportWidth;
+                const WIX_MOBILE_REFERENCE_HEIGHT =
+                    568;
 
+                const scale =
+                    viewportHeight /
+                    WIX_MOBILE_REFERENCE_HEIGHT;
 
-                if (isPortraitMobile) {
-                    const scale =
-                        viewportWidth /
-                        WIX_MOBILE_WIDTH;
+                const scaledWidth =
+                    WIX_MOBILE_WIDTH *
+                    scale;
 
-
-                    websiteFrame.style.top =
-                        "0";
-
-                    websiteFrame.style.left =
-                        "0";
-
-                    websiteFrame.style.width =
-                        WIX_MOBILE_WIDTH + "px";
-
-
-                    /*
-                     * Compensate for the transform vertically so
-                     * the iframe still fills the visible screen.
-                     */
-
-                    websiteFrame.style.height =
+                const left =
+                    Math.max(
+                        0,
                         (
-                            viewportHeight /
-                            scale
-                        ) + "px";
+                            viewportWidth -
+                            scaledWidth
+                        ) / 2
+                    );
 
 
-                    websiteFrame.style.transformOrigin =
-                        "top left";
+                websiteFrame.style.top =
+                    "0";
 
-                    websiteFrame.style.transform =
-                        `scale(${scale})`;
+                websiteFrame.style.left =
+                    left + "px";
 
-                    return;
-                }
+                websiteFrame.style.width =
+                    WIX_MOBILE_WIDTH + "px";
+
+                websiteFrame.style.height =
+                    WIX_MOBILE_REFERENCE_HEIGHT + "px";
+
+                websiteFrame.style.transformOrigin =
+                    "top left";
+
+                websiteFrame.style.transform =
+                    `scale(${scale})`;
+            }
 
 
+            function applyStandardFrame() {
                 /*
-                 * LANDSCAPE PHONE / TABLET / DESKTOP
-                 *
-                 * Do not apply the 320px mobile scaling.
-                 *
-                 * Wix receives the full browser viewport and
-                 * handles its normal responsive layout.
+                 * TABLET / DESKTOP
                  */
 
                 websiteFrame.style.top =
@@ -256,15 +342,31 @@
 
 
             /* =====================================================
+               RESPONSIVE FRAME CONTROLLER
+               ===================================================== */
+
+            function applyResponsiveFrame() {
+                if (isLandscapePhone()) {
+                    applyLandscapeMobileFrame();
+                    return;
+                }
+
+
+                if (isPortraitPhone()) {
+                    applyPortraitMobileFrame();
+                    return;
+                }
+
+
+                applyStandardFrame();
+            }
+
+
+            /* =====================================================
                RESPONSIVE UPDATE SCHEDULER
                ===================================================== */
 
             function scheduleResponsiveUpdate() {
-                /*
-                 * Two animation frames allow the browser's viewport
-                 * dimensions to settle before recalculating.
-                 */
-
                 requestAnimationFrame(() => {
                     requestAnimationFrame(
                         applyResponsiveFrame
@@ -315,23 +417,28 @@
                 "orientationchange",
                 () => {
                     /*
-                     * Mobile Safari can briefly report the old
-                     * viewport dimensions during rotation.
+                     * Safari can report intermediate viewport sizes
+                     * during rotation.
                      *
-                     * Run an immediate scheduled update and two
-                     * delayed confirmations after the rotation.
+                     * Re-check immediately and again after Safari has
+                     * had time to settle on its final dimensions.
                      */
 
                     scheduleResponsiveUpdate();
 
                     setTimeout(
                         applyResponsiveFrame,
-                        150
+                        100
                     );
 
                     setTimeout(
                         applyResponsiveFrame,
-                        350
+                        250
+                    );
+
+                    setTimeout(
+                        applyResponsiveFrame,
+                        500
                     );
                 }
             );
