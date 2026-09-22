@@ -42,7 +42,6 @@ let listenSent=false;
 let isLive=null,bootstrapMuted=false,bootstrapComplete=false,streamEnded=false,endReason="",videoEnded=false;
 let desiredVolume=100;
 let desiredMuted=false;
-let pendingFreshTimeRequestId="";
 
 function emit(type,extra={}){
   try{
@@ -108,9 +107,23 @@ function applyDesiredAudio(){
 }
 function finishBootstrap(){
   if(bootstrapComplete)return;
-  bootstrapComplete=true; bootstrapMuted=false;
-  command("pauseVideo");
-  applyDesiredAudio();
+
+  // V2 BRIDGE:
+  // Bootstrap exists to establish a legitimate muted autoplay session.
+  // The previous bridge immediately paused the player as soon as metadata
+  // arrived, which created the fresh-login paused state seen in Staff.
+  // Keep the player muted and PLAYING instead. The Staff viewer remains the
+  // authority for later pause/unmute commands.
+  bootstrapComplete=true;
+  bootstrapMuted=false;
+  desiredMuted=true;
+  command("mute");
+  command("setVolume",[0]);
+
+  if(!streamEnded&&!videoEnded){
+    command("playVideo");
+  }
+
   emit("BOOTSTRAP_READY");
 }
 function attachListeners(){
@@ -132,6 +145,7 @@ function buildEmbed(id){
   const p=new URLSearchParams({
     enablejsapi:"1",
     autoplay:"1",
+    mute:"1",
     controls:"0",
     playsinline:"1",
     rel:"0",
@@ -178,6 +192,13 @@ function handleYouTubeMessage(ev){
 
   if(m.event==="onReady"){
     ytReady=true;
+
+    // Establish autoplay at the earliest reliable YouTube-ready event.
+    desiredMuted=true;
+    command("mute");
+    command("setVolume",[0]);
+    if(!streamEnded&&!videoEnded)command("playVideo");
+
     emit("READY");
     requestInfo();
     return;
@@ -227,11 +248,6 @@ function handleYouTubeMessage(ev){
     }
     if(Number.isFinite(Number(info.currentTime)))currentTime=Number(info.currentTime);
     if(Number.isFinite(Number(info.duration)))duration=Number(info.duration);
-    if(pendingFreshTimeRequestId && Number.isFinite(Number(info.currentTime))){
-      const requestId=pendingFreshTimeRequestId;
-      pendingFreshTimeRequestId="";
-      emit("FRESH_TIME",{freshTimeRequestId:requestId,freshMeasuredAt:Date.now()});
-    }
     if(Number.isFinite(Number(info.playerState))){
       const next=Number(info.playerState);
       if(next!==state){state=next;stateFired=true;emit("STATE");}
@@ -277,9 +293,6 @@ window.addEventListener("message",ev=>{
     desiredMuted=false;
     command("setVolume",[desiredVolume]);
     command("unMute");
-  }else if(m.command==="GET_FRESH_TIME"){
-    pendingFreshTimeRequestId=String(m.requestId||"");
-    requestInfo();
   }else if(m.command==="GET_STATE"||m.command==="GET_TIME"){
     requestInfo();
   }
@@ -294,7 +307,15 @@ setInterval(()=>{
     ytPost({event:"listening",id:"tjkYoutube"});
     attachListeners();
     requestInfo();
-    if(!bootstrapComplete&&!bootstrapMuted)beginBootstrap();
+    if(!bootstrapComplete){
+      if(!bootstrapMuted)beginBootstrap();
+
+      // During initial player establishment, muted PLAY is idempotent and
+      // autoplay-safe. Do not let a transient pause/cued state win the race.
+      command("mute");
+      command("setVolume",[0]);
+      if(!streamEnded&&!videoEnded)command("playVideo");
+    }
   }
   emit("TIME");
 },250);
