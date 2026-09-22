@@ -42,7 +42,6 @@ let listenSent=false;
 let isLive=null,bootstrapMuted=false,bootstrapComplete=false,streamEnded=false,endReason="",videoEnded=false;
 let desiredVolume=100;
 let desiredMuted=false;
-let pendingFreshTimeRequestId="";
 
 function emit(type,extra={}){
   try{
@@ -227,11 +226,6 @@ function handleYouTubeMessage(ev){
     }
     if(Number.isFinite(Number(info.currentTime)))currentTime=Number(info.currentTime);
     if(Number.isFinite(Number(info.duration)))duration=Number(info.duration);
-    if(pendingFreshTimeRequestId && Number.isFinite(Number(info.currentTime))){
-      const requestId=pendingFreshTimeRequestId;
-      pendingFreshTimeRequestId="";
-      emit("FRESH_TIME",{freshTimeRequestId:requestId,freshMeasuredAt:Date.now()});
-    }
     if(Number.isFinite(Number(info.playerState))){
       const next=Number(info.playerState);
       if(next!==state){state=next;stateFired=true;emit("STATE");}
@@ -277,9 +271,6 @@ window.addEventListener("message",ev=>{
     desiredMuted=false;
     command("setVolume",[desiredVolume]);
     command("unMute");
-  }else if(m.command==="GET_FRESH_TIME"){
-    pendingFreshTimeRequestId=String(m.requestId||"");
-    requestInfo();
   }else if(m.command==="GET_STATE"||m.command==="GET_TIME"){
     requestInfo();
   }
