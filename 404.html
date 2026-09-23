@@ -180,10 +180,34 @@
                         window.innerHeight
                     );
 
+                /*
+                 * Never decide "phone" from viewport size alone.
+                 * Desktop zoom/narrow windows can make a Mac or PC viewport
+                 * look phone-sized even though the device is still desktop.
+                 */
+                const coarsePointer =
+                    window.matchMedia &&
+                    window.matchMedia("(pointer: coarse)").matches;
+
+                const noHover =
+                    window.matchMedia &&
+                    window.matchMedia("(hover: none)").matches;
+
+                const touchCapable =
+                    Number(navigator.maxTouchPoints || 0) > 0;
+
+                const mobileUserAgent =
+                    /Android|iPhone|iPod|Mobile/i.test(
+                        navigator.userAgent || ""
+                    );
+
+                const mobileLikeDevice =
+                    mobileUserAgent ||
+                    (touchCapable && coarsePointer && noHover);
 
                 return (
-                    shortSide <=
-                    PHONE_SHORT_SIDE_MAX
+                    shortSide <= PHONE_SHORT_SIDE_MAX &&
+                    mobileLikeDevice
                 );
             }
 
