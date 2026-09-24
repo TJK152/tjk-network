@@ -129,6 +129,9 @@ function goLive(delay=desiredDelaySeconds){
   command("seekTo",[target,true]);
   desiredPlaying=true;
   command("playVideo");
+  setTimeout(()=>command("playVideo"),120);
+  setTimeout(()=>command("playVideo"),500);
+  setTimeout(()=>command("playVideo"),1200);
   pendingGoLive=false;
   emit("GO_LIVE",{liveEdge:edge,liveTarget:target});
   return true;
@@ -156,7 +159,9 @@ function buildEmbed(id){
   if(!currentVideoId)return;
   ytReady=false; listenSent=false; state=-1; currentTime=0; duration=0; lastError=null;
   stateFired=false; errorFired=false; loadCalled=true; isLive=null; bootstrapMuted=false; bootstrapComplete=false; streamEnded=false; endReason=""; videoEnded=false;
-  seekableStart=null;seekableEnd=null;dvrAvailable=null;delaySupported=null;pendingGoLive=false;
+  seekableStart=null;seekableEnd=null;dvrAvailable=null;delaySupported=null;
+  // Do NOT clear pendingGoLive here. LOAD/RELOAD sets it before rebuilding so
+  // the fresh iframe can land at live-edge-minus-delay as soon as metadata arrives.
 
   const p=new URLSearchParams({
     enablejsapi:"1",
@@ -260,8 +265,11 @@ function handleYouTubeMessage(ev){
     // YouTube's embed infoDelivery varies by stream/player build. Use explicit
     // seekable fields when present; otherwise duration is the best live-edge
     // value exposed by the iframe protocol.
-    const ss=[info.seekableStart,info.seekableStartTime,info.liveSeekableStart].find(v=>Number.isFinite(Number(v)));
-    const se=[info.seekableEnd,info.seekableEndTime,info.liveSeekableEnd].find(v=>Number.isFinite(Number(v)));
+    const ps=(info.progressState&&typeof info.progressState==="object")?info.progressState:{};
+    const ss=[info.seekableStart,info.seekableStartTime,info.liveSeekableStart,
+              ps.seekableStart,ps.seekableStartTime].find(v=>Number.isFinite(Number(v)));
+    const se=[info.seekableEnd,info.seekableEndTime,info.liveSeekableEnd,
+              ps.seekableEnd,ps.seekableEndTime].find(v=>Number.isFinite(Number(v)));
     if(ss!==undefined)seekableStart=Number(ss);
     if(se!==undefined)seekableEnd=Number(se);
     if(isLive===true){
@@ -275,7 +283,10 @@ function handleYouTubeMessage(ev){
         dvrAvailable=null;
         delaySupported=null;
       }
-      if(pendingGoLive&&liveEdge()!==null)goLive(desiredDelaySeconds);
+      if(pendingGoLive&&liveEdge()!==null){
+        goLive(desiredDelaySeconds);
+        setTimeout(()=>goLive(desiredDelaySeconds),350);
+      }
     }else if(isLive===false){
       dvrAvailable=false;delaySupported=false;
     }
@@ -306,8 +317,8 @@ window.addEventListener("message",ev=>{
     emit("LOAD_RECEIVED");
     desiredPlaying=true;
     desiredDelaySeconds=Math.max(0,Number(m.delaySeconds)||0);
-    pendingGoLive=true;
     buildEmbed(currentVideoId);
+    pendingGoLive=true;
   }else if(m.command==="PLAY"){
     desiredPlaying=true;
     if(!streamEnded&&!videoEnded)command("playVideo");
@@ -324,8 +335,8 @@ window.addEventListener("message",ev=>{
   }else if(m.command==="RELOAD"){
     desiredPlaying=true;
     desiredDelaySeconds=Math.max(0,Number(m.delaySeconds)||0);
-    pendingGoLive=true;
     buildEmbed(currentVideoId);
+    pendingGoLive=true;
   }else if(m.command==="SEEK"){
     if(!streamEnded&&!videoEnded)command("seekTo",[Math.max(0,Number(m.seconds)||0),true]);
   }else if(m.command==="CAPTIONS_OFF"){
