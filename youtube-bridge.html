@@ -121,9 +121,11 @@ function liveEdge(){
   if(isLive===true && Number.isFinite(Number(duration)) && duration>0)return Number(duration);
   return null;
 }
-function goLive(delay=desiredDelaySeconds){
+let liveAcquireToken=0;
+function acquireFreshLiveTarget(delay=desiredDelaySeconds){
   desiredDelaySeconds=Math.max(0,Number(delay)||0);
   desiredPlaying=true;
+
   if(isLive===false){
     pendingGoLive=false;
     command("playVideo");
@@ -135,21 +137,42 @@ function goLive(delay=desiredDelaySeconds){
     requestInfo();
     return false;
   }
-  const edge=liveEdge();
-  if(!Number.isFinite(edge)){
-    pendingGoLive=true;
-    command("playVideo");
-    requestInfo();
-    return false;
-  }
-  const start=Number.isFinite(Number(seekableStart))?Number(seekableStart):0;
-  const target=Math.max(start,edge-desiredDelaySeconds);
-  // Single seek to one sampled live edge; repeated moving-edge seeks caused jump loops.
-  command("seekTo",[target,true]);
-  command("playVideo");
+
+  const token=++liveAcquireToken;
   pendingGoLive=false;
-  emit("GO_LIVE",{liveEdge:edge,liveTarget:target});
+
+  // IMPORTANT: always reacquire the REAL live head first. Never derive a new
+  // delay from currentTime because currentTime may already be 30/45/etc behind.
+  // YouTube clamps an intentionally-future seek to its current live head.
+  command("seekTo",[1e12,true]);
+  command("playVideo");
+
+  setTimeout(()=>{
+    if(token!==liveAcquireToken)return;
+    requestInfo();
+
+    setTimeout(()=>{
+      if(token!==liveAcquireToken)return;
+      const freshEdge=Number(currentTime);
+      if(!Number.isFinite(freshEdge)||freshEdge<=0){
+        pendingGoLive=true;
+        return;
+      }
+
+      const start=Number.isFinite(Number(seekableStart))?Number(seekableStart):0;
+      const target=Math.max(start,freshEdge-desiredDelaySeconds);
+
+      // The requested delay is always measured from this freshly acquired edge.
+      command("seekTo",[target,true]);
+      command("playVideo");
+      pendingGoLive=false;
+      emit("GO_LIVE",{liveEdge:freshEdge,liveTarget:target,freshLiveEdge:true});
+    },180);
+  },320);
   return true;
+}
+function goLive(delay=desiredDelaySeconds){
+  return acquireFreshLiveTarget(delay);
 }
 function finishBootstrap(){
   if(bootstrapComplete)return;
