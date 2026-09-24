@@ -97,6 +97,7 @@ function requestInfo(){
   command("getDuration");
   command("getPlayerState");
   command("getVideoData");
+  command("getVideoLoadedFraction");
 }
 
 function beginBootstrap(){
@@ -122,16 +123,35 @@ function liveEdge(){
 }
 function goLive(delay=desiredDelaySeconds){
   desiredDelaySeconds=Math.max(0,Number(delay)||0);
-  if(isLive!==true){emit("LIVE_STATUS");return false}
-  const edge=liveEdge();
-  if(!Number.isFinite(edge)){pendingGoLive=true;requestInfo();return false}
-  const target=Math.max(Number.isFinite(Number(seekableStart))?Number(seekableStart):0,edge-desiredDelaySeconds);
-  command("seekTo",[target,true]);
   desiredPlaying=true;
+
+  // If live metadata has not arrived yet, remember the request. Never turn a
+  // GO LIVE/PLAY into a no-op just because metadata is a few frames late.
+  if(isLive!==true){
+    pendingGoLive=true;
+    command("playVideo");
+    requestInfo();
+    emit("LIVE_STATUS");
+    return false;
+  }
+
+  const edge=liveEdge();
+  if(!Number.isFinite(edge)){
+    pendingGoLive=true;
+    command("playVideo");
+    requestInfo();
+    return false;
+  }
+
+  const start=Number.isFinite(Number(seekableStart))?Number(seekableStart):0;
+  const target=Math.max(start,edge-desiredDelaySeconds);
+
+  command("seekTo",[target,true]);
   command("playVideo");
-  setTimeout(()=>command("playVideo"),120);
-  setTimeout(()=>command("playVideo"),500);
-  setTimeout(()=>command("playVideo"),1200);
+  // YouTube sometimes ignores a seek issued during a state transition. Repeat
+  // the exact production target after the transition settles.
+  setTimeout(()=>{command("seekTo",[target,true]);command("playVideo")},250);
+  setTimeout(()=>{command("seekTo",[target,true]);command("playVideo")},750);
   pendingGoLive=false;
   emit("GO_LIVE",{liveEdge:edge,liveTarget:target});
   return true;
@@ -253,6 +273,7 @@ function handleYouTubeMessage(ev){
     const vd=info.videoData;
     if(vd&&typeof vd.isLive==="boolean")isLive=vd.isLive;
     else if(vd&&typeof vd.isLiveContent==="boolean")isLive=vd.isLiveContent;
+    if(isLive===true&&pendingGoLive)setTimeout(()=>goLive(desiredDelaySeconds),0);
     if(isLive===true && state===0 && !streamEnded){
       streamEnded=true;
       endReason="YouTube live metadata confirmed after ENDED state";
@@ -274,8 +295,13 @@ function handleYouTubeMessage(ev){
     if(se!==undefined)seekableEnd=Number(se);
     if(isLive===true){
       if(Number.isFinite(Number(seekableStart))&&Number.isFinite(Number(seekableEnd))){
-        dvrAvailable=(seekableEnd-seekableStart)>5;
-        delaySupported=dvrAvailable;
+        if((seekableEnd-seekableStart)>5){
+          dvrAvailable=true;
+          delaySupported=true;
+        }else{
+          dvrAvailable=null;
+          delaySupported=null;
+        }
       }else if(duration>0){
         // Fallback for embeds that expose the rolling live edge as duration.
         // A delay command is attempted; the player itself clamps to live when
@@ -331,12 +357,22 @@ window.addEventListener("message",ev=>{
     goLive(desiredDelaySeconds);
   }else if(m.command==="SET_DELAY"){
     desiredDelaySeconds=Math.max(0,Number(m.delaySeconds)||0);
-    if(isLive===true)goLive(desiredDelaySeconds);
+    pendingGoLive=true;
+    goLive(desiredDelaySeconds);
   }else if(m.command==="RELOAD"){
     desiredPlaying=true;
     desiredDelaySeconds=Math.max(0,Number(m.delaySeconds)||0);
-    buildEmbed(currentVideoId);
-    pendingGoLive=true;
+    streamEnded=false;videoEnded=false;endReason="";
+    // Keep the existing iframe/capture surface alive. Re-cue the same video
+    // in-place instead of destroying/recreating the iframe (which produced
+    // a persistent black WebRTC capture on reload).
+    if(currentVideoId){
+      command("loadVideoById",[currentVideoId]);
+      pendingGoLive=true;
+      setTimeout(()=>{requestInfo();goLive(desiredDelaySeconds)},300);
+      setTimeout(()=>{requestInfo();goLive(desiredDelaySeconds)},900);
+      setTimeout(()=>{requestInfo();goLive(desiredDelaySeconds)},1800);
+    }
   }else if(m.command==="SEEK"){
     if(!streamEnded&&!videoEnded)command("seekTo",[Math.max(0,Number(m.seconds)||0),true]);
   }else if(m.command==="CAPTIONS_OFF"){
