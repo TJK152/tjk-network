@@ -124,35 +124,31 @@ function liveEdge(){
 function goLive(delay=desiredDelaySeconds){
   desiredDelaySeconds=Math.max(0,Number(delay)||0);
   desiredPlaying=true;
-  pendingGoLive=true;
-
-  // Do not depend on duration as the live edge. For YouTube live streams,
-  // seek far forward and let YouTube clamp to its actual current live head.
-  // Then read that clamped currentTime and move back by the configured delay.
+  if(isLive===false){
+    pendingGoLive=false;
+    command("playVideo");
+    return false;
+  }
+  if(isLive!==true){
+    pendingGoLive=true;
+    command("playVideo");
+    requestInfo();
+    return false;
+  }
+  const edge=liveEdge();
+  if(!Number.isFinite(edge)){
+    pendingGoLive=true;
+    command("playVideo");
+    requestInfo();
+    return false;
+  }
+  const start=Number.isFinite(Number(seekableStart))?Number(seekableStart):0;
+  const target=Math.max(start,edge-desiredDelaySeconds);
+  // Single seek to one sampled live edge; repeated moving-edge seeks caused jump loops.
+  command("seekTo",[target,true]);
   command("playVideo");
-  command("seekTo",[1e12,true]);
-
-  const settleAndOffset=(wait)=>{
-    setTimeout(()=>{
-      requestInfo();
-      setTimeout(()=>{
-        const edge=Number(currentTime);
-        if(!Number.isFinite(edge)||edge<=0){
-          command("playVideo");
-          return;
-        }
-        const start=Number.isFinite(Number(seekableStart))?Number(seekableStart):0;
-        const target=Math.max(start,edge-desiredDelaySeconds);
-        command("seekTo",[target,true]);
-        command("playVideo");
-        pendingGoLive=false;
-        emit("GO_LIVE",{liveEdge:edge,liveTarget:target});
-      },180);
-    },wait);
-  };
-
-  settleAndOffset(120);
-  settleAndOffset(550);
+  pendingGoLive=false;
+  emit("GO_LIVE",{liveEdge:edge,liveTarget:target});
   return true;
 }
 function finishBootstrap(){
@@ -289,7 +285,8 @@ function handleYouTubeMessage(ev){
     const ss=[info.seekableStart,info.seekableStartTime,info.liveSeekableStart,
               ps.seekableStart,ps.seekableStartTime].find(v=>Number.isFinite(Number(v)));
     const se=[info.seekableEnd,info.seekableEndTime,info.liveSeekableEnd,
-              ps.seekableEnd,ps.seekableEndTime].find(v=>Number.isFinite(Number(v)));
+              ps.seekableEnd,ps.seekableEndTime,ps.loaded,ps.duration,
+              info.liveHeadTime].find(v=>Number.isFinite(Number(v)));
     if(ss!==undefined)seekableStart=Number(ss);
     if(se!==undefined)seekableEnd=Number(se);
     if(isLive===true){
@@ -308,12 +305,11 @@ function handleYouTubeMessage(ev){
         dvrAvailable=null;
         delaySupported=null;
       }
-      if(pendingGoLive&&liveEdge()!==null){
-        goLive(desiredDelaySeconds);
-        setTimeout(()=>goLive(desiredDelaySeconds),350);
-      }
+      if(pendingGoLive&&liveEdge()!==null)goLive(desiredDelaySeconds);
     }else if(isLive===false){
       dvrAvailable=false;delaySupported=false;
+      desiredDelaySeconds=0;
+      pendingGoLive=false;
     }
     if(Number.isFinite(Number(info.playerState))){
       const next=Number(info.playerState);
@@ -346,7 +342,10 @@ window.addEventListener("message",ev=>{
     pendingGoLive=true;
   }else if(m.command==="PLAY"){
     desiredPlaying=true;
-    if(!streamEnded&&!videoEnded)goLive(desiredDelaySeconds);
+    if(!streamEnded&&!videoEnded){
+      if(isLive===true)goLive(desiredDelaySeconds);
+      else command("playVideo");
+    }
   }else if(m.command==="PAUSE"){
     desiredPlaying=false;
     if(!bootstrapMuted)command("pauseVideo");
@@ -368,9 +367,7 @@ window.addEventListener("message",ev=>{
     if(currentVideoId){
       command("loadVideoById",[currentVideoId]);
       pendingGoLive=true;
-      setTimeout(()=>{requestInfo();goLive(desiredDelaySeconds)},300);
-      setTimeout(()=>{requestInfo();goLive(desiredDelaySeconds)},900);
-      setTimeout(()=>{requestInfo();goLive(desiredDelaySeconds)},1800);
+      setTimeout(()=>{requestInfo();goLive(desiredDelaySeconds)},700);
     }
   }else if(m.command==="SEEK"){
     if(!streamEnded&&!videoEnded)command("seekTo",[Math.max(0,Number(m.seconds)||0),true]);
