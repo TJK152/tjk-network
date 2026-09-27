@@ -351,13 +351,53 @@
                WEBSITE LOADING
                ===================================================== */
 
+            const GITHUB_RESOURCES = Object.freeze({
+                "staff-viewer": "staff-resources/staff-viewer.html",
+                "youtube-player": "staff-resources/youtube-player.html",
+                "youtube-bridge": "staff-resources/youtube-bridge.html"
+            });
+
+            function getCleanRouteName(path) {
+                const clean = String(path || "/").replace(/^\/+|\/+$/g, "");
+                if (!clean || clean.includes("/")) return "";
+                return clean.toLowerCase();
+            }
+
+            function getGitHubResourceUrl(websitePath) {
+                const route = getCleanRouteName(websitePath);
+                const resource = GITHUB_RESOURCES[route];
+                if (!resource) return "";
+
+                return (
+                    window.location.origin +
+                    GITHUB_PROJECT_BASE.replace(/\/$/, "") +
+                    "/" +
+                    resource
+                );
+            }
+
             function loadWebsite() {
-                const websitePath =
-                    getWebsitePath();
+                const websitePath = getWebsitePath();
+                const queryString = window.location.search || "";
+                const resourceUrl = getGitHubResourceUrl(websitePath);
 
-                const queryString =
-                    window.location.search || "";
-
+                /*
+                 * GitHub folders are organizational only.
+                 * Registered HTML resources receive clean public routes:
+                 *
+                 * /staff-viewer  -> staff-resources/staff-viewer.html
+                 *
+                 * Everything not registered here continues to Wix. Wix then
+                 * displays its matching page or its normal 404 page.
+                 */
+                if (resourceUrl) {
+                    window.location.replace(
+                        resourceUrl +
+                        queryString +
+                        (window.location.hash || "")
+                    );
+                    return;
+                }
 
                 websiteFrame.src =
                     WEBSITE_ORIGIN +
