@@ -1,0 +1,2416 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="referrer" content="strict-origin-when-cross-origin">
+<title>TJK NETWORK Staff Video Viewer</title>
+<style>
+:root{
+  --blue:#004CBF;
+  --border:#007DFF;
+  --white:#FFFFFF;
+  --buttonText:#0326FF;
+}
+*{box-sizing:border-box}
+html,body{
+  margin:0;
+  width:100%;
+  height:100%;
+  overflow:hidden;
+  background:#000;
+  color:#fff;
+  font-family:Arial,sans-serif;
+}
+body{display:flex;flex-direction:column}
+#viewer{
+  position:relative;
+  flex:1 1 auto;
+  min-height:0;
+  background:#000;
+}
+#htmlVideo,#rawVideo,#youtubeHost{pointer-events:none;
+  position:absolute;
+  inset:0;
+  width:100%;
+  height:100%;
+  background:#000;
+}
+#htmlVideo,#rawVideo{
+  object-fit:contain;
+  image-rendering:auto;
+}
+#youtubeHost iframe{
+  width:100%!important;
+  height:100%!important;
+  pointer-events:none!important;
+}
+#loginProcessingVeil{
+  position:absolute;
+  inset:0;
+  z-index:9;
+  background:#000;
+  display:none;
+  pointer-events:none;
+}
+#youtubeEndCover{
+  position:absolute;
+  inset:0;
+  z-index:9;
+  background:#000;
+  display:none;
+  pointer-events:none;
+}
+.hidden{display:none!important}
+#centerStatus{
+  position:absolute;
+  left:50%;
+  top:50%;
+  transform:translate(-50%,-50%);
+  z-index:10;
+  max-width:min(760px,calc(100vw - 40px));
+  padding:12px 16px;
+  border-radius:10px;
+  background:rgba(0,0,0,.74);
+  text-align:center;
+  font-weight:bold;
+  line-height:1.4;
+  white-space:pre-wrap;
+}
+#connectionStatus{
+  position:absolute;
+  top:12px;
+  left:12px;
+  z-index:11;
+  padding:8px 11px;
+  border-radius:8px;
+  background:rgba(0,0,0,.68);
+  font-size:13px;
+  font-weight:bold;
+  line-height:1.35;
+  pointer-events:none;
+}
+#sourceBadge{
+  position:absolute;
+  top:12px;
+  right:12px;
+  z-index:11;
+  padding:8px 11px;
+  border-radius:8px;
+  background:rgba(0,0,0,.68);
+  font-size:13px;
+  font-weight:bold;
+  pointer-events:none;
+}
+#controls{
+  flex:0 0 auto;
+  background:var(--blue);
+  border-top:5px solid var(--border);
+  padding:10px 14px calc(10px + env(safe-area-inset-bottom));
+}
+#controlInner{
+  max-width:1250px;
+  margin:0 auto;
+  display:grid;
+  grid-template-columns:auto auto minmax(220px,1fr) auto auto auto;
+  gap:10px;
+  align-items:center;
+}
+button,select,input{font:inherit}
+button,select{
+  min-height:48px;
+  border:4px solid var(--border);
+  border-radius:10px;
+  background:#fff;
+  color:var(--buttonText);
+  font-weight:bold;
+}
+button{
+  min-width:58px;
+  padding:7px 13px;
+  cursor:pointer;
+}
+button:not(:disabled):hover{background:#0093FF;color:#fff}
+button:disabled,select:disabled,input:disabled{cursor:default!important;pointer-events:none!important}
+#playPause,#syncButton,#mute,#fullscreen{
+  width:52px;
+  min-width:52px;
+  height:52px;
+  min-height:52px;
+  padding:0;
+  border-radius:10px;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  flex:0 0 52px;
+  font-size:23px;
+}
+#playPause{
+  font-family:Arial,sans-serif;
+  font-weight:700;
+  font-size:22px;
+  letter-spacing:normal;
+  line-height:normal;
+  padding:0;
+}
+#volumeBox{
+  min-width:220px;
+  display:grid;
+  grid-template-columns:auto 1fr auto;
+  gap:8px;
+  align-items:center;
+}
+#volume{width:100%;accent-color:#FFFFFF;transition:filter 160ms ease,opacity 160ms ease}
+#volume.mutedVisual{filter:grayscale(1);opacity:1;accent-color:#808080}
+#volumeValue{
+  min-width:43px;
+  text-align:right;
+  font-weight:bold;
+}
+#quality{
+  height:52px;
+  min-height:52px;
+  padding:5px 9px;
+}
+#changeDevice{
+  min-width:112px;
+  height:52px;
+  min-height:52px;
+}
+button:disabled,select:disabled{opacity:.45}
+#deviceModal{
+  position:fixed;
+  inset:0;
+  z-index:50;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  padding:20px;
+  background:rgba(0,0,0,.88);
+}
+#deviceCard{
+  width:min(520px,100%);
+  padding:22px;
+  border:5px solid var(--border);
+  border-radius:15px;
+  background:var(--blue);
+}
+#deviceCard h1{margin:0 0 8px;font-size:24px}
+#deviceCard p{margin:0 0 15px;line-height:1.4}
+#deviceInput{
+  width:100%;
+  height:50px;
+  padding:9px 11px;
+  border:5px solid var(--border);
+  border-radius:9px;
+  background:#fff;
+  color:#0326FF;
+  font-weight:bold;
+}
+#connectButton{width:100%;margin-top:10px}
+#modalStatus{
+  min-height:18px;
+  margin-top:10px;
+  font-size:13px;
+  font-weight:bold;
+}
+@media(max-width:820px){
+  #controlInner{grid-template-columns:auto 1fr auto}
+  #volumeBox{grid-column:1/-1;grid-row:2}
+  #quality{width:100%}
+  #changeDevice{display:none}
+}
+
+body.fullscreen-idle #controls,
+body.fullscreen-idle #topBar{opacity:0;pointer-events:none;}
+#controls,#topBar{transition:opacity 200ms ease;}
+</style>
+</head>
+<body>
+
+<div id="viewer">
+  <video id="htmlVideo" playsinline preload="auto"></video>
+  <video id="rawVideo" playsinline autoplay class="hidden"></video>
+  <div id="youtubeHost" class="hidden"></div>
+  <div id="youtubeEndCover"></div>
+  <div id="loginProcessingVeil"></div>
+  <div id="centerStatus">Enter the Device ID to connect.</div>
+  <div id="connectionStatus">DISCONNECTED</div>
+  <div id="sourceBadge">OFF</div>
+</div>
+
+<div id="controls">
+  <div id="controlInner">
+    <button id="playPause" type="button" title="Pause / Play">Ⅱ</button>
+    <button id="syncButton" type="button" title="Sync to OBS">🔄</button>
+
+    <div id="volumeBox">
+      <button id="mute" type="button" title="Mute / Unmute">🔊</button>
+      <input id="volume" type="range" min="0" max="100" step="1" value="100">
+      <div id="volumeValue">100%</div>
+    </div>
+
+    <select id="quality" aria-label="Video quality">
+      <option value="auto">Auto</option>
+      <option value="1080" selected>1080p30 — High</option>
+      <option value="720">720p30</option>
+      <option value="540">540p30</option>
+      <option value="480">480p30</option>
+      <option value="360">360p30 — Low Data</option>
+    </select>
+
+    <button id="changeDevice" type="button">DEVICE ID</button>
+    <button id="fullscreen" type="button" title="Full Screen">⛶</button>
+  </div>
+</div>
+
+<div id="deviceModal">
+  <div id="deviceCard">
+    <h1>TJK NETWORK STAFF VIDEO</h1>
+    <p>Enter the Device ID for the active TJK NETWORK broadcast.</p>
+    <input id="deviceInput" type="text" autocomplete="off" spellcheck="false" placeholder="DEVICE ID">
+    <button id="connectButton" type="button">CONNECT</button>
+    <div id="modalStatus"></div>
+  </div>
+</div>
+
+<script>
+"use strict";
+
+const FIREBASE_BASE="https://tjk-network-controls-default-rtdb.firebaseio.com";
+const DEVICE_STORAGE_KEY="tjk-staff-video-device-id-v2";
+const CLIENT_STORAGE_KEY="tjk-staff-video-client-id-v2";
+const QUALITY_STORAGE_KEY="tjk-staff-video-quality-v2";
+const VOLUME_STORAGE_KEY="tjk-staff-video-volume-v2";
+const SAFE_LIVE_LATENCY_SECONDS=5;
+
+const htmlVideo=document.getElementById("htmlVideo");
+const rawVideo=document.getElementById("rawVideo");
+const youtubeHost=document.getElementById("youtubeHost");
+const youtubeEndCover=document.getElementById("youtubeEndCover");
+const loginProcessingVeil=document.getElementById("loginProcessingVeil");
+const centerStatus=document.getElementById("centerStatus");
+const connectionStatus=document.getElementById("connectionStatus");
+const sourceBadge=document.getElementById("sourceBadge");
+const deviceModal=document.getElementById("deviceModal");
+const deviceInput=document.getElementById("deviceInput");
+const connectButton=document.getElementById("connectButton");
+const modalStatus=document.getElementById("modalStatus");
+const playPause=document.getElementById("playPause");
+const syncButton=document.getElementById("syncButton");
+const muteButton=document.getElementById("mute");
+const volume=document.getElementById("volume");
+const volumeValue=document.getElementById("volumeValue");
+const quality=document.getElementById("quality");
+const fullscreen=document.getElementById("fullscreen");
+const changeDevice=document.getElementById("changeDevice");
+
+let deviceId="";
+let clientId="";
+let firebaseStream=null;
+let firebaseView={};
+let state=null;
+let currentSourceKey="";
+let locallyPaused=false;
+let hls=null;
+let hlsJsPromise=null;
+let youtubeApiPromise=null;
+const YOUTUBE_BRIDGE_URL="https://tjk152.github.io/tjk-network/youtube-bridge.html";
+let youtubeBridgeFrame=null;
+let youtubeBridgeReady=false;
+let youtubeBridgeState=-1;
+let youtubeBridgeDuration=0;
+let youtubeBridgeTime=0;
+let youtubePlayer=null;
+let youtubeReady=false;
+let rawPc=null;
+let rawStream=null;
+let rawRequestId="";
+let rawLastAnswerRequestId="";
+let rawReconnectTimer=null;
+let sourceGeneration=0;
+let pendingSyncRequestId="";
+let lastHandledSyncResponse="";
+let productionSyncTimeout=null;
+let lastProductionStateSignature="";
+let lastProductionCommandId="";
+let lastGlobalStaffSyncRequestId="";
+let initialSourceSyncDone=false;
+let lastRuntimeReadyKey="";
+let staffMediaEnded=false,currentMediaIsLive=null,autoSyncTimer=null,autoSyncBusy=false,staffMuted=false;
+const AUTO_SYNC_INTERVAL_MS=60000;
+const AUTO_SYNC_TOLERANCE_SECONDS=0.12;
+const YOUTUBE_AUTO_SYNC_TOLERANCE_SECONDS=0.35;
+const YOUTUBE_AUTO_SYNC_CONFIRM_MS=350;
+const PROCESSING_MIN_MS=350;
+let processingFeed=false;
+let processingStartedAt=0;
+let fullscreenUiTimer=null;
+let lastProductionPlayerSessionId="";
+let pendingObsRefreshResync=false;
+let youtubeObsRefreshReloadRequired=false;
+let loginSyncPending=false;
+let loginSyncGeneration=-1;
+let loginSyncPromise=null;
+let deterministicSyncPromise=null;
+let deterministicSyncQueued=false;
+let loginConvergencePending=false;
+
+// FINAL STARTUP/SOURCE-LOAD AUTO-SYNC ATTEMPT:
+// Let YouTube genuinely PLAY for 5 continuous seconds first, then perform
+// three sequential calls to the exact same routine used by the SYNC button.
+let youtubeActivePlayStartedAt=0;
+let youtubeStartupMultiSyncGeneration=-1;
+let youtubeStartupMultiSyncRunning=false;
+let youtubeStartupMultiSyncDone=false;
+const YOUTUBE_ACTIVE_PLAY_BEFORE_MULTI_SYNC_MS=5000;
+const YOUTUBE_STARTUP_MULTI_SYNC_PRESSES=0;
+
+function resetYoutubeStartupMultiSync(){
+  youtubeActivePlayStartedAt=0;
+  youtubeStartupMultiSyncGeneration=-1;
+  youtubeStartupMultiSyncRunning=false;
+  youtubeStartupMultiSyncDone=false;
+}
+
+async function runYoutubeStartupMultiSync(gen){
+  if(youtubeStartupMultiSyncRunning||youtubeStartupMultiSyncDone)return;
+  if(gen!==sourceGeneration||staffMediaEnded||locallyPaused)return;
+  if(normalizedType(state&&state.sourceType,state&&state.sourceUrl)!=="youtube")return;
+
+  youtubeStartupMultiSyncRunning=true;
+  youtubeStartupMultiSyncGeneration=gen;
+
+  try{
+    for(let i=0;i<YOUTUBE_STARTUP_MULTI_SYNC_PRESSES;i++){
+      if(gen!==sourceGeneration||staffMediaEnded||locallyPaused)return;
+      if(Number(youtubeBridgeState)!==1)return;
+
+      // Exact same synchronization function used by the manual SYNC button.
+      await runExactManualSyncFunction("automatic-startup-sync-"+(i+1),i===0);
+
+      if(gen!==sourceGeneration||staffMediaEnded||locallyPaused)return;
+      if(i<YOUTUBE_STARTUP_MULTI_SYNC_PRESSES-1){
+        await new Promise(r=>setTimeout(r,900));
+      }
+    }
+    if(gen===sourceGeneration)youtubeStartupMultiSyncDone=true;
+  }finally{
+    youtubeStartupMultiSyncRunning=false;
+  }
+}
+
+function watchYoutubeActivePlaybackForStartupSync(){
+  if(!state ||
+     normalizedType(state.sourceType,state.sourceUrl)!=="youtube" ||
+     staffMediaEnded ||
+     locallyPaused ||
+     youtubeStartupMultiSyncDone ||
+     youtubeStartupMultiSyncRunning){
+    youtubeActivePlayStartedAt=0;
+    return;
+  }
+
+  // Count ACTIVE PLAYING time only. Buffering, paused, cued, etc. reset the clock.
+  if(Number(youtubeBridgeState)!==1){
+    youtubeActivePlayStartedAt=0;
+    return;
+  }
+
+  const now=Date.now();
+  if(!youtubeActivePlayStartedAt){
+    youtubeActivePlayStartedAt=now;
+    return;
+  }
+
+  if(now-youtubeActivePlayStartedAt>=YOUTUBE_ACTIVE_PLAY_BEFORE_MULTI_SYNC_MS){
+    youtubeActivePlayStartedAt=0;
+    runYoutubeStartupMultiSync(sourceGeneration).catch(showError);
+  }
+}
+
+// DIAGNOSTIC BUILD: automatic startup/resume cleanup disabled.
+// setInterval(watchYoutubeActivePlaybackForStartupSync,100);
+
+function beginProcessingFeed(){
+  processingFeed=true;
+  processingStartedAt=Date.now();
+  setCenter("PROCESSING VIDEO FEED",true);
+
+  // Absolute safety valve: a missing/stale OBS sync response must never leave
+  // PROCESSING VIDEO FEED stuck over otherwise playable video forever.
+  const generationAtStart=sourceGeneration;
+  setTimeout(()=>{
+    if(processingFeed && generationAtStart===sourceGeneration){
+      processingFeed=false;
+      setCenter("",false);
+    }
+  },3500);
+}
+async function finishProcessingFeed(){
+  setConnection("FIREBASE CONNECTED");
+  const wait=Math.max(0,PROCESSING_MIN_MS-(Date.now()-processingStartedAt));
+  if(wait)await new Promise(r=>setTimeout(r,wait));
+  processingFeed=false;
+  setCenter("",false);
+}
+async function processAndSyncRunningFeed(reason="initial-connect"){
+  if(!deviceId||!state)return;
+  const type=normalizedType(state.sourceType,state.sourceUrl);
+
+  // OFF / empty production state is authoritative. There is no feed to process.
+  if(!type || type==="off"){
+    processingFeed=false;
+    loginSyncPending=false;
+    window.__tjkLoginVeilArm=0;
+    if(loginProcessingVeil)loginProcessingVeil.style.display="none";
+    hideAllMedia();
+    setSourceBadge("");
+    setCenter("NO VIDEO FEED LOADED",true);
+    return;
+  }
+
+  beginProcessingFeed();
+  const gen=sourceGeneration, started=Date.now();
+
+  while(Date.now()-started<5000 && gen===sourceGeneration){
+    if(type==="nfhs" && rawStream && rawVideo.readyState>=2)break;
+    if(type==="youtube" && youtubeReady && youtubeBridgeReady)break;
+    if((type==="hls"||type==="mp4") && htmlVideo.readyState>=2)break;
+    await new Promise(r=>setTimeout(r,100));
+  }
+  if(gen!==sourceGeneration)return;
+
+  if(type==="nfhs"){
+    if(rawStream){
+      try{rawVideo.srcObject=rawStream;await rawVideo.play()}catch(_){}
+    }
+    await finishProcessingFeed();
+    return;
+  }
+
+  await deterministicProductionSync(reason,{processing:true});
+}
+
+function youtubeStaffMediaActuallyReady(){
+  return !!(
+    youtubeBridgeReady &&
+    youtubeReady &&
+    (youtubeBridgeState >= 0 || youtubeBridgeDuration > 0 || youtubeBridgeTime > 0)
+  );
+}
+
+async function runSettledYoutubeSyncSequence(reason="youtube-single-seek-sync",options={}){
+  if(!deviceId||!state||staffMediaEnded)return;
+  const gen=sourceGeneration;
+  const type=normalizedType(state.sourceType,state.sourceUrl);
+  if(type!=="youtube")return deterministicProductionSync(reason,{processing:options.processing!==false});
+
+  const processing=options.processing!==false;
+  if(processing && !processingFeed)beginProcessingFeed();
+
+  // DIAGNOSTIC MANUAL SYNC:
+  // one fresh OBS measurement -> one target -> one seek -> one play/pause command.
+  // No verification, no correction, no second OBS measurement, no convergence.
+  const response=await requestProductionSync();
+  if(gen!==sourceGeneration||!response)return;
+  if(Number(response.sourceRevision)!==Number(state.sourceRevision))return;
+
+  if(response.dvrUnavailable){
+    setProcessingStatus("LIVE DELAY UNAVAILABLE");
+    await new Promise(r=>setTimeout(r,700));
+    if(processingFeed)finishProcessingFeed();
+    return;
+  }
+  if(response.waitingForDelay||response.delayWaiting||response.delayReady===false){
+    setProcessingStatus("WAITING FOR PRODUCTION DELAY");
+    return;
+  }
+
+  const target=compensatedProductionTarget(response,"youtube");
+
+  try{youtubePlayer.seekTo(target,true)}catch(_){}
+
+  if(response.productionPlaying){
+    try{youtubePlayer.playVideo()}catch(_){}
+    locallyPaused=false;
+    setPlayPauseIcon(false);
+    playPause.title="Pause";
+  }else{
+    try{youtubePlayer.pauseVideo()}catch(_){}
+    locallyPaused=true;
+    setPlayPauseIcon(true);
+    playPause.title="Play";
+  }
+
+  // UI-only settling delay. Nothing is allowed to seek or resync here.
+  await new Promise(r=>setTimeout(r,850));
+  if(gen!==sourceGeneration)return;
+
+  if(processingFeed)finishProcessingFeed();
+}
+async function runLoginBlackScreenSpamSync(){
+  if(!loginSyncPending || !deviceId || !state)return;
+  const gen=sourceGeneration;
+  if(loginSyncPromise && loginSyncGeneration===gen)return loginSyncPromise;
+
+  loginSyncGeneration=gen;
+  loginSyncPromise=(async()=>{
+    const type=normalizedType(state.sourceType,state.sourceUrl);
+    if(type==="nfhs"){
+      loginSyncPending=false;
+      if(loginProcessingVeil)loginProcessingVeil.style.display="none";
+      return;
+    }
+
+    const started=Date.now();
+    let lastYoutubeLoadRetry=0;
+    while(Date.now()-started<2500 && gen===sourceGeneration){
+      if(type==="youtube"){
+        if(youtubeStaffMediaActuallyReady())break;
+        if(Date.now()-lastYoutubeLoadRetry>=700){
+          lastYoutubeLoadRetry=Date.now();
+          const id=String(state.sourceId||parseYouTubeId(state.sourceUrl)||"").trim();
+          if(id)youtubeBridgePost("LOAD",{
+            videoId:id,id,sourceId:id,url:String(state.sourceUrl||"")
+          });
+        }
+      }else if((type==="hls"||type==="mp4") && htmlVideo.readyState>=2){
+        break;
+      }
+      await new Promise(r=>setTimeout(r,100));
+    }
+    if(gen!==sourceGeneration)return;
+
+    if(type==="youtube" && !youtubeStaffMediaActuallyReady()){
+      loginSyncPending=false;
+      processingFeed=false;
+      if(loginProcessingVeil)loginProcessingVeil.style.display="none";
+      youtubeHost.classList.remove("hidden");
+      setCenter("",false);
+      return;
+    }
+
+    // Keep the login veil up while YouTube settles, then automatically repeat
+    // the same sync transaction that is successful when SYNC is clicked manually.
+    if(type==="youtube"){
+      // Login has no user gesture. Establish playback muted first so YouTube
+      // autoplay policy cannot leave the Staff embed paused, then run the
+      // unchanged one-shot synchronization routine.
+      try{
+        youtubeBridgePost("MUTE");
+        youtubeBridgePost("SET_VOLUME",{volume:0});
+        if(youtubePlayer)youtubePlayer.playVideo();
+      }catch(_){}
+      const autoplayStart=Date.now();
+      while(Date.now()-autoplayStart<1800 && gen===sourceGeneration){
+        if(Number(youtubeBridgeState)===1)break;
+        try{if(youtubePlayer)youtubePlayer.playVideo()}catch(_){}
+        await new Promise(r=>setTimeout(r,150));
+      }
+      // Login is the one case where a brand-new YouTube iframe can take
+      // several seconds to finish reacting to its first seek. Manual SYNC is
+      // already accurate once the iframe is established, so reproduce those
+      // successful human corrections here with REAL settling time between them.
+      // This loop is login-only and runs before the black login veil is removed.
+      await runSettledYoutubeSyncSequence("login",{processing:true});
+      if(gen!==sourceGeneration)return;
+
+      // IMPORTANT: do not try to finish YouTube synchronization while the
+      // login routine is still active. The proven manual SYNC happens only
+      // after login has completely finished and the normal viewer state is
+      // restored. Reproduce that exact lifecycle here.
+      // Keep the fresh YouTube iframe muted through login. Restoring audible
+      // volume here can make browser autoplay policy pause the iframe.
+
+      // V12: do NOT perform another seek while the login lifecycle is still
+      // active. Manual SYNC is accurate only after the normal viewer state has
+      // been restored, so the final authoritative correction is scheduled
+      // after loginSyncPending is cleared and the iframe is revealed.
+      loginConvergencePending=false;
+    }
+    else{
+      await new Promise(r=>setTimeout(r,220));
+      await deterministicProductionSync("login",{processing:true});
+    }
+    if(gen!==sourceGeneration)return;
+
+    loginSyncPending=false;
+
+    // Explicitly reveal the successfully prepared media before removing the
+    // startup veil.
+    if(type==="youtube"){
+      youtubeHost.classList.remove("hidden");
+      htmlVideo.classList.add("hidden");
+      rawVideo.classList.add("hidden");
+    }else if(type==="hls"||type==="mp4"){
+      htmlVideo.classList.remove("hidden");
+      youtubeHost.classList.add("hidden");
+      rawVideo.classList.add("hidden");
+    }
+
+    if(loginProcessingVeil)loginProcessingVeil.style.display="none";
+
+    // Startup synchronization is now owned exclusively by the
+    // five-seconds-of-active-play multi-SYNC watcher.
+
+    // playAndSyncProduction normally clears this through finishProcessingFeed.
+    // Clear it here as a final invariant so a completed login can never leave
+    // PROCESSING VIDEO FEED stranded over already-playing video.
+    processingFeed=false;
+    setCenter("",false);
+  })().finally(()=>{
+    if(loginSyncGeneration===gen){
+      loginConvergencePending=false;
+      loginSyncPromise=null;
+      loginSyncGeneration=-1;
+    }
+  });
+
+  return loginSyncPromise;
+}
+
+
+function clearStaleProcessingOverlay(){
+  if(loginConvergencePending)return;
+  if(!processingFeed)return;
+  const type=normalizedType(state&&state.sourceType,state&&state.sourceUrl);
+  if(type==="youtube" && youtubeStaffMediaActuallyReady()){
+    const age=Date.now()-processingStartedAt;
+    if(age>=1800){
+      processingFeed=false;
+      if(loginProcessingVeil)loginProcessingVeil.style.display="none";
+      setCenter("",false);
+    }
+  }
+}
+setInterval(clearStaleProcessingOverlay,250);
+
+function currentStaffPosition(type){
+  try{
+    if(type==="youtube")return Number(youtubeBridgeTime);
+    if(type==="hls"||type==="mp4")return Number(htmlVideo.currentTime);
+  }catch(_){}
+  return NaN;
+}
+function revealFullscreenUi(){
+  document.body.classList.remove("fullscreen-idle");
+  if(fullscreenUiTimer)clearTimeout(fullscreenUiTimer);
+  if(document.fullscreenElement){
+    fullscreenUiTimer=setTimeout(()=>document.body.classList.add("fullscreen-idle"),2200);
+  }
+}
+
+function cleanDeviceId(v){
+  return String(v||"").trim().replace(/[.#$\[\]\/]/g,"_");
+}
+
+function makeClientId(){
+  const existing=String(localStorage.getItem(CLIENT_STORAGE_KEY)||"").trim();
+  if(existing)return existing;
+  const id="staff-"+Date.now().toString(36)+"-"+Math.random().toString(36).slice(2,10);
+  localStorage.setItem(CLIENT_STORAGE_KEY,id);
+  return id;
+}
+
+function clientPath(suffix){
+  return `${FIREBASE_BASE}/devices/${encodeURIComponent(deviceId)}/videoUnified/staff/clients/${encodeURIComponent(clientId)}/${suffix}.json`;
+}
+function streamPath(){
+  return `${FIREBASE_BASE}/devices/${encodeURIComponent(deviceId)}/videoUnified.json`;
+}
+
+async function fbPut(url,value){
+  const r=await fetch(url,{
+    method:"PUT",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify(value),
+    cache:"no-store"
+  });
+  if(!r.ok)throw new Error(`Firebase PUT ${r.status}`);
+  return r.json().catch(()=>null);
+}
+async function fbDelete(url,keepalive=false){
+  const r=await fetch(url,{method:"DELETE",cache:"no-store",keepalive});
+  if(!r.ok)throw new Error(`Firebase DELETE ${r.status}`);
+}
+
+function setNestedValue(root,path,data,isPatch){
+  const parts=String(path||"/").split("/").filter(Boolean);
+  if(!parts.length){
+    if(isPatch && root && typeof root==="object" && data && typeof data==="object"){
+      Object.assign(root,data);return root;
+    }
+    return data && typeof data==="object" ? data : {};
+  }
+  let target=root;
+  for(let i=0;i<parts.length-1;i++){
+    const k=parts[i];
+    if(!target[k]||typeof target[k]!=="object")target[k]={};
+    target=target[k];
+  }
+  const last=parts[parts.length-1];
+  if(isPatch && target[last] && typeof target[last]==="object" && data && typeof data==="object"){
+    Object.assign(target[last],data);
+  }else if(data===null){
+    delete target[last];
+  }else{
+    target[last]=data;
+  }
+  return root;
+}
+
+function normalizedType(v,url){
+  const s=String(url||"").trim();
+  try{
+    const u=new URL(s);
+    const host=u.hostname.toLowerCase();
+    if(host.includes("youtube.com")||host.includes("youtu.be"))return "youtube";
+    const p=u.pathname.toLowerCase();
+    if(p.includes(".m3u8"))return "hls";
+    if(p.includes(".mp4"))return "mp4";
+  }catch(e){}
+  v=String(v||"").toLowerCase();
+  return ["nfhs","hls","youtube","mp4"].includes(v)?v:"";
+}
+
+function sourceKeyOf(s){
+  return JSON.stringify([
+    s&&s.sourceType||"",
+    s&&s.sourceUrl||"",
+    s&&s.sourceId||"",
+    s&&s.sourceRevision||0
+  ]);
+}
+
+function parseYouTubeId(input){
+  const s=String(input||"").trim();
+  if(/^[a-zA-Z0-9_-]{11}$/.test(s))return s;
+  try{
+    const u=new URL(s);
+    if(u.hostname.includes("youtu.be"))return u.pathname.split("/").filter(Boolean)[0]||"";
+    if(u.searchParams.get("v"))return u.searchParams.get("v")||"";
+    const p=u.pathname.split("/").filter(Boolean);
+    const ix=p.findIndex(x=>["embed","live","shorts"].includes(x));
+    if(ix>=0&&p[ix+1])return p[ix+1];
+  }catch(e){}
+  return "";
+}
+
+function setCenter(msg,visible=true){
+  centerStatus.textContent=msg;
+  centerStatus.style.display=visible?"block":"none";
+}
+
+function showStaffEndedBlack(isLive){
+  staffMediaEnded=true;
+  processingFeed=false;
+  loginSyncPending=false;
+  if(loginProcessingVeil)loginProcessingVeil.style.display="none";
+
+  try{htmlVideo.pause()}catch(_){}
+  try{rawVideo.pause()}catch(_){}
+
+  // Hide every media surface so no frozen final frame remains visible.
+  htmlVideo.classList.add("hidden");
+  rawVideo.classList.add("hidden");
+  youtubeHost.classList.add("hidden");
+  if(youtubeEndCover)youtubeEndCover.style.display="none";
+
+  // centerStatus sits over the viewer's permanent black background.
+  setCenter(isLive?"STREAM ENDED":"VIDEO ENDED",true);
+}
+function setConnection(msg){connectionStatus.textContent=msg}
+function setPlayPauseIcon(paused){
+  playPause.textContent=paused?"▶︎":"Ⅱ";
+  playPause.title=paused?"Play":"Pause";
+}
+function setSourceBadge(type){
+  const labels={nfhs:"BROWSER CAPTURE",hls:"HLS / HUDL",youtube:"YOUTUBE",mp4:"MP4"};
+  sourceBadge.textContent=labels[type]||"OFF";
+
+  const normalized=String(type||"").toLowerCase();
+  const noFeed=!normalized || normalized==="off";
+  const webRtcShared=normalized==="youtube";
+
+  // With production OFF there is nothing to pause, resume, or synchronize.
+  // Disable both buttons so the NO VIDEO FEED LOADED state cannot be cleared.
+  playPause.disabled=noFeed;
+  playPause.style.opacity=noFeed?".45":"1";
+  playPause.style.pointerEvents=noFeed?"none":"auto";
+  playPause.title=noFeed?"No video feed loaded":"Pause / Play";
+
+  syncButton.disabled=noFeed||webRtcShared;
+  syncButton.style.opacity=(noFeed||webRtcShared)?".45":"1";
+  syncButton.style.pointerEvents=(noFeed||webRtcShared)?"none":"auto";
+  syncButton.title=noFeed
+    ?"No video feed loaded"
+    :(webRtcShared?"Not needed — YouTube uses one shared WebRTC timeline":"Sync to OBS");
+}
+
+function hideAllMedia(){
+  htmlVideo.classList.add("hidden");
+  rawVideo.classList.add("hidden");
+  youtubeHost.classList.add("hidden");
+}
+
+function destroyDirectMedia(){
+  if(hls){
+    try{hls.destroy()}catch(_){}
+    hls=null;
+  }
+  try{htmlVideo.pause()}catch(_){}
+  htmlVideo.removeAttribute("src");
+  try{htmlVideo.load()}catch(_){}
+
+  if(youtubePlayer){
+    try{youtubePlayer.destroy()}catch(_){}
+    youtubePlayer=null;
+  }
+  youtubeBridgeFrame=null;
+  youtubeBridgeReady=false;
+  youtubeReady=false;
+  youtubeHost.innerHTML="";
+}
+
+function closeRawPeer(){
+  if(rawReconnectTimer){
+    clearTimeout(rawReconnectTimer);
+    rawReconnectTimer=null;
+  }
+  if(rawPc){
+    try{rawPc.ontrack=null;rawPc.onconnectionstatechange=null;rawPc.close()}catch(_){}
+    rawPc=null;
+  }
+  rawStream=null;
+  rawVideo.srcObject=null;
+}
+
+function destroySource(){
+  sourceGeneration++;
+  loginConvergencePending=false;
+  staffMediaEnded=false;
+  currentMediaIsLive=null;
+  if(youtubeEndCover)youtubeEndCover.style.display="none";
+  destroyDirectMedia();
+  closeRawPeer();
+  hideAllMedia();
+}
+
+function markStaffMediaEnded(isLive,reason=""){
+  showStaffEndedBlack(isLive===true);
+  return;
+}
+function updateMuteVisual(){
+  const muted=isMuted();
+  volume.classList.toggle("mutedVisual",muted);
+  volume.setAttribute("aria-disabled",muted?"true":"false");
+}
+function canAutoSync(){
+  if(!deviceId||!state||locallyPaused||staffMediaEnded||pendingSyncRequestId||autoSyncBusy)return false;
+  const t=normalizedType(state.sourceType,state.sourceUrl);
+  return ["hls","mp4"].includes(t)&&!productionDelayWaiting()&&productionDelayReady();
+}
+async function runExactManualSyncFunction(reason="manual-equivalent",processing=true){
+  if(!deviceId||!state||staffMediaEnded)return;
+  const type=normalizedType(state.sourceType,state.sourceUrl);
+  if(type==="youtube"){
+    setCenter("YouTube WebRTC is already on the shared production timeline.",true);
+    setTimeout(()=>{if(normalizedType(state&&state.sourceType,state&&state.sourceUrl)==="youtube")setCenter("",false)},900);
+    return;
+  }
+  return deterministicProductionSync(reason,{processing});
+}
+
+async function syncOnlyIfOutOfSync(reason="conditional-sync",processing=false){
+  if(!deviceId||!state||staffMediaEnded||locallyPaused)return false;
+  const gen=sourceGeneration;
+  const type=normalizedType(state.sourceType,state.sourceUrl);
+  if(!["hls","mp4"].includes(type))return false;
+
+  // Fresh OBS measurement first. If Staff is already aligned, do absolutely
+  // nothing: no seek, no play command, no processing overlay.
+  const response=await requestProductionSync();
+  if(gen!==sourceGeneration||!response)return false;
+  if(Number(response.sourceRevision||0)!==Number(state.sourceRevision||0))return false;
+  if(response.dvrUnavailable||response.waitingForDelay||response.delayWaiting||response.delayReady===false)return false;
+
+  const target=compensatedProductionTarget(response,type);
+  const local=currentStaffPosition(type);
+  const tolerance=type==="youtube"?0.35:0.12;
+  const outOfSync=!Number.isFinite(local)||Math.abs(local-target)>tolerance;
+
+  if(!outOfSync)return false;
+
+  // Once drift is confirmed, use the exact proven manual-button function.
+  await runExactManualSyncFunction(reason,processing);
+  return true;
+}
+
+async function autoSyncToProduction(){
+  if(!canAutoSync())return;
+  autoSyncBusy=true;
+  try{
+    await syncOnlyIfOutOfSync("automatic-60-second-sync",false);
+  }catch(e){console.warn(e)}
+  finally{autoSyncBusy=false}
+}
+function startAutoSyncTimer(){
+  if(autoSyncTimer)clearInterval(autoSyncTimer);
+  // DIAGNOSTIC BUILD: 60-second auto-sync disabled while validating manual SYNC.
+  // autoSyncTimer=setInterval(autoSyncToProduction,AUTO_SYNC_INTERVAL_MS);
+}
+
+function waitIceComplete(peer,timeoutMs=4000){
+  if(peer.iceGatheringState==="complete")return Promise.resolve();
+  return new Promise(resolve=>{
+    let done=false;
+    const finish=()=>{
+      if(done)return;
+      done=true;
+      peer.removeEventListener("icegatheringstatechange",check);
+      resolve();
+    };
+    const check=()=>{if(peer.iceGatheringState==="complete")finish()};
+    peer.addEventListener("icegatheringstatechange",check);
+    setTimeout(finish,timeoutMs);
+  });
+}
+
+function getConfiguredLatency(){
+  const n=Number(state&&state.targetLatencySeconds);
+  return Number.isFinite(n)?Math.max(0,n):3;
+}
+function getEffectiveLatency(){
+  const n=getConfiguredLatency();
+  return n<=0?SAFE_LIVE_LATENCY_SECONDS:n;
+}
+
+function formatDelaySeconds(seconds){
+  const n=Math.max(0,Number(seconds)||0);
+  if(Math.abs(n-Math.round(n))<0.01)return Math.round(n)+" SECONDS";
+  return n.toFixed(1)+" SECONDS";
+}
+function staffWaitingMessage(seconds=getEffectiveLatency()){
+  return "WAITING FOR FEED TO REACH "+formatDelaySeconds(seconds);
+}
+function currentRuntime(){
+  const r=firebaseView&&firebaseView.runtime;
+  if(!r||!state)return null;
+  if(Number(r.sourceRevision||0)!==Number(state.sourceRevision||0))return null;
+  return r;
+}
+function productionDelayWaiting(){
+  const r=currentRuntime();
+  return !!(r&&r.delayWaiting);
+}
+function productionDelayReady(){
+  const r=currentRuntime();
+  return !r || !!r.delayReady;
+}
+function showProductionDelayState(){
+  const r=currentRuntime();
+  if(!r)return false;
+  if(r.dvrUnavailable && r.delaySupported!==false){
+    setCenter("YOUTUBE DVR IS NOT AVAILABLE FOR THIS LIVE STREAM",true);
+    return true;
+  }
+  if(r.delayWaiting){
+    setCenter(staffWaitingMessage(Number(r.delaySeconds)||getEffectiveLatency()),true);
+    try{htmlVideo.pause()}catch(_){}
+    try{if(youtubeReady&&youtubePlayer)youtubePlayer.pauseVideo()}catch(_){}
+    return true;
+  }
+  return false;
+}
+
+function getHlsLiveEdge(){
+  try{
+    if(htmlVideo.seekable&&htmlVideo.seekable.length){
+      return Number(htmlVideo.seekable.end(htmlVideo.seekable.length-1));
+    }
+  }catch(_){}
+  try{
+    const d=hls&&hls.latestLevelDetails;
+    if(d&&Number.isFinite(Number(d.edge)))return Number(d.edge);
+  }catch(_){}
+  return NaN;
+}
+function syncHlsToProduction(){
+  const edge=getHlsLiveEdge();
+  if(!Number.isFinite(edge))return false;
+  const target=edge-getEffectiveLatency();
+  try{
+    const start=htmlVideo.seekable&&htmlVideo.seekable.length
+      ? Number(htmlVideo.seekable.start(0))
+      : 0;
+    htmlVideo.currentTime=Math.max(start,target);
+    return true;
+  }catch(_){
+    return false;
+  }
+}
+
+function requestedHeight(){
+  if(quality.value==="auto")return 1080;
+  return Number(quality.value)||1080;
+}
+
+function chooseHlsCap(levels){
+  const maxH=requestedHeight();
+  let best=-1,bestScore=-1;
+  (levels||[]).forEach((level,index)=>{
+    const w=Number(level&&level.width)||0;
+    const h=Number(level&&level.height)||0;
+    const fps=Number(level&&level.frameRate)||0;
+    if(h>maxH || fps>30.5)return;
+    const score=(w*h*100000000)+(Number(level&&level.bitrate)||0);
+    if(score>bestScore){bestScore=score;best=index}
+  });
+  return best;
+}
+function applyHlsQuality(){
+  if(!hls || !Array.isArray(hls.levels) || !hls.levels.length)return;
+  const cap=chooseHlsCap(hls.levels);
+  if(cap>=0){
+    try{hls.autoLevelCapping=cap}catch(_){}
+  }
+}
+
+function ensureHlsJs(){
+  if(window.Hls)return Promise.resolve();
+  if(hlsJsPromise)return hlsJsPromise;
+  hlsJsPromise=new Promise((resolve,reject)=>{
+    const s=document.createElement("script");
+    s.src="https://cdn.jsdelivr.net/npm/hls.js@1.6.13/dist/hls.min.js";
+    s.onload=()=>resolve();
+    s.onerror=()=>reject(new Error("Could not load hls.js"));
+    document.head.appendChild(s);
+  });
+  return hlsJsPromise;
+}
+
+function youtubeBridgePost(command,payload={}){
+  if(!youtubeBridgeFrame||!youtubeBridgeFrame.contentWindow)return;
+  youtubeBridgeFrame.contentWindow.postMessage(Object.assign({tjkYoutubeBridge:true,command},payload),"https://tjk152.github.io");
+}
+
+function makeYoutubeBridgeAdapter(){
+  return {
+    playVideo(){youtubeBridgePost("PLAY")},
+    pauseVideo(){youtubeBridgePost("PAUSE")},
+    seekTo(seconds){youtubeBridgePost("SEEK",{seconds:Math.max(0,Number(seconds)||0)})},
+    setVolume(v){youtubeBridgePost("SET_VOLUME",{volume:Math.max(0,Math.min(100,Number(v)||0))})},
+    mute(){
+      youtubeBridgePost("MUTE");
+      youtubeBridgePost("SET_VOLUME",{volume:0});
+    },
+    unMute(){
+      const desired=Math.max(0,Math.min(100,Number(volume.value)||0));
+      youtubeBridgePost("UNMUTE");
+      youtubeBridgePost("SET_VOLUME",{volume:desired});
+    },
+    isMuted(){return !!staffMuted},
+    getCurrentTime(){return youtubeBridgeTime},
+    getDuration(){return youtubeBridgeDuration},
+    getPlayerState(){return youtubeBridgeState},
+    getVideoData(){return {isLive:currentMediaIsLive===true,isLiveContent:currentMediaIsLive===true}},
+    setPlaybackQuality(){},
+    setPlaybackQualityRange(){},
+    destroy(){
+      if(youtubeBridgeFrame){try{youtubeBridgeFrame.remove()}catch(_){}}
+      youtubeBridgeFrame=null;
+      youtubeBridgeReady=false;
+    }
+  };
+}
+
+window.addEventListener("message",event=>{
+  if(event.origin!=="https://tjk152.github.io")return;
+  const m=event.data;
+  if(!m||typeof m!=="object")return;
+  // Accept the working production bridge telemetry shape.
+  if(typeof m.time==="number")youtubeBridgeTime=m.time;
+  else if(typeof m.currentTime==="number")youtubeBridgeTime=m.currentTime;
+  if(typeof m.duration==="number")youtubeBridgeDuration=m.duration;
+  if(typeof m.state==="number")youtubeBridgeState=m.state;
+  if(typeof m.isLive==="boolean")currentMediaIsLive=m.isLive;
+
+  if(m.streamEnded===true){
+    markStaffMediaEnded(true,m.endReason||"YouTube bridge stream ended");
+    return;
+  }
+  if(m.videoEnded===true){
+    markStaffMediaEnded(false,"YouTube bridge VOD ended");
+    return;
+  }
+  if(youtubeBridgeState===0 && currentMediaIsLive!==null){
+    markStaffMediaEnded(currentMediaIsLive===true,"YouTube bridge ENDED state");
+    return;
+  }
+
+  const hasBridgeTelemetry=(
+    typeof m.playerReady==="boolean" ||
+    typeof m.apiReady==="boolean" ||
+    typeof m.state==="number" ||
+    typeof m.currentTime==="number" ||
+    typeof m.duration==="number" ||
+    m.type==="READY" || m.event==="READY" || m.type==="STATE" || m.event==="STATE"
+  );
+  const ready=!!(m.playerReady||m.ready||m.apiReady||m.type==="READY"||m.event==="READY"||
+                 (hasBridgeTelemetry && typeof m.state==="number"));
+  if(ready&&!youtubeBridgeReady){
+    youtubeBridgeReady=true;
+    youtubeReady=true;
+    applyVolume();
+    setMuted(staffMuted);
+    applyYouTubeQuality();
+    if(productionDelayWaiting())showProductionDelayState();
+    else if(!locallyPaused){
+      if(!loginSyncPending){
+        initialSourceSyncDone=true;
+        playAndSyncProduction("initial-youtube-sync").catch(showError);
+      }
+    }else setCenter("",false);
+  }
+});
+
+function ensureYouTubeApi(){
+  if(window.YT&&window.YT.Player)return Promise.resolve();
+  if(youtubeApiPromise)return youtubeApiPromise;
+  youtubeApiPromise=new Promise((resolve,reject)=>{
+    const old=window.onYouTubeIframeAPIReady;
+    window.onYouTubeIframeAPIReady=()=>{
+      try{if(typeof old==="function")old()}catch(_){}
+      resolve();
+    };
+    const s=document.createElement("script");
+    s.src="https://www.youtube.com/iframe_api";
+    s.onerror=()=>reject(new Error("Could not load YouTube API"));
+    document.head.appendChild(s);
+    setTimeout(()=>{
+      if(window.YT&&window.YT.Player)resolve();
+    },2000);
+  });
+  return youtubeApiPromise;
+}
+
+function youtubeQualityName(){
+  const h=requestedHeight();
+  if(h>=1080)return "hd1080";
+  if(h>=720)return "hd720";
+  if(h>=540)return "large";
+  return "medium";
+}
+function applyYouTubeQuality(){
+  if(!youtubeReady||!youtubePlayer)return;
+  if(quality.value==="auto")return;
+  try{
+    const q=youtubeQualityName();
+    if(youtubePlayer.setPlaybackQualityRange)youtubePlayer.setPlaybackQualityRange(q,q);
+    if(youtubePlayer.setPlaybackQuality)youtubePlayer.setPlaybackQuality(q);
+  }catch(_){}
+}
+
+
+function forceHtmlCaptionsOff(media){
+  if(!media)return;
+  try{
+    const tracks=media.textTracks;
+    for(let i=0;i<tracks.length;i++)tracks[i].mode="disabled";
+  }catch(_){}
+}
+function applyVolume(){
+  const v=Math.max(0,Math.min(100,Number(volume.value)||0));
+  htmlVideo.volume=v/100;
+  rawVideo.volume=v/100;
+
+  if(youtubeReady&&youtubePlayer){
+    try{
+      if(staffMuted){
+        youtubeBridgePost("SET_VOLUME",{volume:0});
+      }else{
+        youtubePlayer.setVolume(v);
+      }
+    }catch(_){}
+  }
+
+  volumeValue.textContent=v+"%";
+  localStorage.setItem(VOLUME_STORAGE_KEY,String(v));
+
+  if(v===0){
+    muteButton.textContent="🔇";
+  }else if(isMuted()){
+    muteButton.textContent="🔇";
+  }else{
+    muteButton.textContent=v<50?"🔉":"🔊";
+  }
+  updateMuteVisual();
+}
+
+function isMuted(){
+  const type=normalizedType(state&&state.sourceType,state&&state.sourceUrl);
+  if(type==="youtube")return staffMuted;
+  if(youtubeReady&&youtubePlayer){
+    try{return youtubePlayer.isMuted()}catch(_){}
+  }
+  return type==="nfhs"?rawVideo.muted:htmlVideo.muted;
+}
+
+function setMuted(muted){
+  staffMuted=!!muted;
+  htmlVideo.muted=muted;
+  rawVideo.muted=muted;
+  try{
+    if(youtubeReady&&youtubePlayer){
+      if(muted)youtubePlayer.mute();
+      else youtubePlayer.unMute();
+    }
+  }catch(_){}
+  const v=Number(volume.value)||0;
+  muteButton.textContent=muted?"🔇":(v<50?"🔉":"🔊");
+  updateMuteVisual();
+}
+
+async function recoverYouTubeRefreshManually(){
+  if(!youtubeObsRefreshReloadRequired)return false;
+
+  // Keep the refreshed Staff feed black until the user's manual PLAY/SYNC
+  // has actually completed the normal baseline sync.
+  hideAllMedia();
+  if(loginProcessingVeil)loginProcessingVeil.style.display="block";
+  setCenter("OBS VIDEO FEED WAS REFRESHED - PLEASE RELOAD OR PRESS PLAY / SYNC",true);
+
+  youtubeObsRefreshReloadRequired=false;
+  locallyPaused=false;
+
+  try{
+    // Use the exact baseline manual sync behavior; do not alter its math.
+    await playAndSyncProduction("manual");
+
+    if(loginProcessingVeil)loginProcessingVeil.style.display="none";
+    setCenter("",false);
+    setPlayPauseIcon(false);
+    playPause.title="Pause";
+    return true;
+  }catch(err){
+    youtubeObsRefreshReloadRequired=true;
+    locallyPaused=true;
+    hideAllMedia();
+    if(loginProcessingVeil)loginProcessingVeil.style.display="block";
+    setCenter("OBS VIDEO FEED WAS REFRESHED - PLEASE RELOAD OR PRESS PLAY / SYNC",true);
+    throw err;
+  }
+}
+
+function pauseLocal(){
+  locallyPaused=true;
+  const type=normalizedType(state&&state.sourceType,state&&state.sourceUrl);
+
+  // YouTube and NFHS are WebRTC feeds in the new system. Pause the local
+  // receiving <video> element only; the sender/production feed keeps running.
+  try{
+    if(type==="youtube"||type==="nfhs")rawVideo.pause();
+    else htmlVideo.pause();
+  }catch(_){}
+
+  setPlayPauseIcon(true);
+  playPause.title=(type==="youtube"||type==="nfhs")?"Play":"Play and sync to production";
+  setCenter(
+    (type==="youtube"||type==="nfhs")
+      ?"PAUSED - Press play to resume the production feed."
+      :"PAUSED — press play to sync back to the production feed.",
+    true
+  );
+}
+
+async function requestProductionSync(){
+  if(!deviceId||!state)return null;
+
+  const type=normalizedType(state.sourceType,state.sourceUrl);
+  if(type==="nfhs")return null;
+
+  pendingSyncRequestId="sync-"+Date.now()+"-"+Math.random().toString(36).slice(2,8);
+  lastHandledSyncResponse="";
+
+  await fbPut(clientPath("syncRequest"),{
+    requestId:pendingSyncRequestId,
+    sourceRevision:Number(state.sourceRevision)||0,
+    requestedAt:Date.now()
+  });
+
+  return new Promise(resolve=>{
+    if(productionSyncTimeout)clearTimeout(productionSyncTimeout);
+    productionSyncTimeout=setTimeout(()=>{
+      productionSyncTimeout=null;
+      pendingSyncRequestId="";
+      resolve(null);
+    },2500);
+
+    window.__resolveProductionSync=resolve;
+  });
+}
+
+function lockYouTubeAfterObsRefresh(newSessionId=""){
+  if(youtubeObsRefreshReloadRequired)return;
+  const type=normalizedType(state&&state.sourceType,state&&state.sourceUrl);
+  if(type!=="youtube")return;
+
+  youtubeObsRefreshReloadRequired=true;
+  pendingObsRefreshResync=false;
+  locallyPaused=true;
+
+  try{htmlVideo.pause()}catch(_){}
+  try{rawVideo.pause()}catch(_){}
+  try{if(youtubeReady&&youtubePlayer)youtubePlayer.pauseVideo()}catch(_){}
+
+  hideAllMedia();
+  if(loginProcessingVeil)loginProcessingVeil.style.display="block";
+  processingFeed=false;
+  setPlayPauseIcon(true);
+  setCenter("OBS VIDEO FEED WAS REFRESHED - PLEASE RELOAD OR PRESS PLAY / SYNC",true);
+
+  if(newSessionId)lastProductionPlayerSessionId=String(newSessionId);
+}
+
+function handleSyncResponse(response){
+  if(!response || !response.requestId || response.requestId!==pendingSyncRequestId)return;
+
+  const responsePlayerSessionId=String(response.playerSessionId||"");
+  const responseType=normalizedType(state&&state.sourceType,state&&state.sourceUrl);
+
+  if(responseType==="youtube" &&
+     responsePlayerSessionId &&
+     lastProductionPlayerSessionId &&
+     responsePlayerSessionId!==lastProductionPlayerSessionId){
+    lockYouTubeAfterObsRefresh(responsePlayerSessionId);
+
+    // Finish the pending request without allowing playAndSyncProduction() to
+    // apply this post-refresh position/paused state to Staff.
+    lastHandledSyncResponse=response.requestId;
+    pendingSyncRequestId="";
+    if(productionSyncTimeout){
+      clearTimeout(productionSyncTimeout);
+      productionSyncTimeout=null;
+    }
+    if(typeof window.__resolveProductionSync==="function"){
+      const fn=window.__resolveProductionSync;
+      window.__resolveProductionSync=null;
+      fn(null);
+    }
+    return;
+  }
+
+  if(responsePlayerSessionId && !lastProductionPlayerSessionId){
+    lastProductionPlayerSessionId=responsePlayerSessionId;
+  }
+
+  if(response.requestId===lastHandledSyncResponse)return;
+
+  lastHandledSyncResponse=response.requestId;
+  pendingSyncRequestId="";
+
+  if(productionSyncTimeout){
+    clearTimeout(productionSyncTimeout);
+    productionSyncTimeout=null;
+  }
+
+  if(typeof window.__resolveProductionSync==="function"){
+    const fn=window.__resolveProductionSync;
+    window.__resolveProductionSync=null;
+    fn(response);
+  }
+}
+
+function compensatedProductionTarget(response,type){
+  let pos=Math.max(0,Number(response&&response.positionSeconds)||0);
+  if(response&&response.productionPlaying&&Number.isFinite(Number(response.respondedAt))){
+    const age=Math.max(0,Math.min(2,(Date.now()-Number(response.respondedAt))/1000));
+    pos+=age;
+    if(type==="youtube"){
+      // Calibrated downward again after +0.38s still landed Staff ahead of OBS.
+      // Apply this once to the single seek target.
+      // No verification/repeated seeks are introduced.
+      pos+=0.08;
+    }
+  }
+  return pos;
+}
+
+async function applyProductionTarget(response,type){
+  let pos=compensatedProductionTarget(response,type);
+  if(type==="youtube"){
+    if(!youtubeReady)return false;
+    try{
+      youtubePlayer.seekTo(pos,true);
+      if(response.productionPlaying)youtubePlayer.playVideo();
+      else youtubePlayer.pauseVideo();
+      return true;
+    }catch(_){return false}
+  }
+  try{
+    if(htmlVideo.seekable&&htmlVideo.seekable.length){
+      const a=Number(htmlVideo.seekable.start(0));
+      const b=Number(htmlVideo.seekable.end(htmlVideo.seekable.length-1));
+      if(Number.isFinite(a)&&Number.isFinite(b))pos=Math.max(a,Math.min(b,pos));
+    }
+    htmlVideo.currentTime=pos;
+    if(response.productionPlaying)await htmlVideo.play().catch(()=>{});
+    else htmlVideo.pause();
+    return true;
+  }catch(_){return false}
+}
+
+async function runDeterministicProductionSync(reason,options={}){
+  if(staffMediaEnded||!deviceId||!state)return;
+  const type=normalizedType(state.sourceType,state.sourceUrl);
+  const processing=options.processing!==false;
+  const gen=sourceGeneration;
+
+  if(processing && !processingFeed)beginProcessingFeed();
+  locallyPaused=false; setPlayPauseIcon(false); playPause.title="Pause";
+
+  if(type==="nfhs"){
+    if(!rawStream)await startRawViewerConnection();
+    else try{rawVideo.srcObject=rawStream;await rawVideo.play()}catch(_){}
+    if(processingFeed)await finishProcessingFeed();
+    return;
+  }
+
+  if(!["hls","youtube","mp4"].includes(type))return;
+
+  const first=await requestProductionSync();
+  if(gen!==sourceGeneration)return;
+  if(!first||Number(first.sourceRevision||0)!==Number(state.sourceRevision||0)){
+    if(processing)setCenter("Could not get sync feedback from OBS. Press SYNC to retry.",true);
+    processingFeed=false;
+    return;
+  }
+  if(first.dvrUnavailable&&first.delaySupported!==false){setCenter("YOUTUBE DVR IS NOT AVAILABLE FOR THIS LIVE STREAM",true);processingFeed=false;return;}
+  if(first.delayWaiting||first.delayReady===false){
+    setCenter(staffWaitingMessage(Number(first.delaySeconds)||getEffectiveLatency()),true);
+    try{htmlVideo.pause()}catch(_){}; try{if(youtubeReady&&youtubePlayer)youtubePlayer.pauseVideo()}catch(_){}
+    processingFeed=false; return;
+  }
+
+  await applyProductionTarget(first,type);
+  if(gen!==sourceGeneration)return;
+
+  // Let the seek/play command actually land, then ask OBS again. The second
+  // response is fresh; we do not recursively call another convergence routine.
+  await new Promise(r=>setTimeout(r,type==="youtube"?500:250));
+  if(gen!==sourceGeneration)return;
+  const verify=await requestProductionSync();
+  if(gen!==sourceGeneration)return;
+
+  if(verify&&Number(verify.sourceRevision||0)===Number(state.sourceRevision||0)){
+    const target=compensatedProductionTarget(verify,type);
+    const local=currentStaffPosition(type);
+    const tolerance=type==="youtube"?0.35:0.12;
+    if(!Number.isFinite(local)||Math.abs(local-target)>tolerance){
+      await applyProductionTarget(verify,type);
+    }else{
+      // Position is already good. Only mirror a changed play/pause state.
+      try{
+        if(type==="youtube"){
+          if(verify.productionPlaying)youtubePlayer.playVideo(); else youtubePlayer.pauseVideo();
+        }else if(verify.productionPlaying){await htmlVideo.play().catch(()=>{})}else htmlVideo.pause();
+      }catch(_){}
+    }
+    if(!verify.productionPlaying){processingFeed=false;setCenter("SYNCED TO OBS — PRODUCTION IS PAUSED",true);return;}
+  }
+
+  if(processingFeed)await finishProcessingFeed(); else if(processing)setCenter("",false);
+}
+
+async function deterministicProductionSync(reason="staff",options={}){
+  // Never allow login, admin, manual, and 60-second sync transactions to
+  // overwrite one another's request IDs. One transaction owns the channel.
+  if(deterministicSyncPromise){
+    deterministicSyncQueued=true;
+    await deterministicSyncPromise.catch(()=>{});
+    if(deterministicSyncQueued){
+      deterministicSyncQueued=false;
+      return deterministicProductionSync(reason,options);
+    }
+    return;
+  }
+  deterministicSyncPromise=runDeterministicProductionSync(reason,options);
+  try{await deterministicSyncPromise}finally{deterministicSyncPromise=null}
+}
+
+async function playAndSyncProduction(reason="staff"){
+  const automatic=reason==="automatic-60-second-sync";
+  return deterministicProductionSync(reason,{processing:!automatic});
+}
+
+async function buildHls(s,generation){
+  hideAllMedia();
+  htmlVideo.classList.remove("hidden");
+  setCenter("Loading HLS / Hudl feed…",true);
+
+  const url=String(s.sourceUrl||"").trim();
+  if(!url)throw new Error("No HLS URL.");
+
+  if(window.MediaSource){
+    await ensureHlsJs();
+    if(generation!==sourceGeneration)return;
+
+    hls=new Hls({
+      enableWorker:true,
+      lowLatencyMode:false,
+      liveSyncDuration:getEffectiveLatency(),
+      liveMaxLatencyDuration:getEffectiveLatency()+60,
+      maxLiveSyncPlaybackRate:1.0,
+      backBufferLength:60,
+      maxBufferLength:30,
+      maxMaxBufferLength:60,
+      maxBufferHole:0.5,
+      highBufferWatchdogPeriod:3,
+      startLevel:-1,
+      testBandwidth:true,
+      capLevelToPlayerSize:true
+    });
+
+    hls.on(Hls.Events.MEDIA_ATTACHED,()=>hls.loadSource(url));
+    hls.on(Hls.Events.MANIFEST_PARSED,()=>{
+      if(generation!==sourceGeneration)return;
+      applyHlsQuality();
+      if(productionDelayWaiting()){
+        showProductionDelayState();
+      }
+    });
+    hls.on(Hls.Events.LEVEL_UPDATED,(event,data)=>{
+      applyHlsQuality();
+      const d=data&&data.details;
+      if(d){
+        if(typeof d.live==="boolean")currentMediaIsLive=d.live;
+        else if(d.endList===true)currentMediaIsLive=false;
+      }
+    });
+    hls.on(Hls.Events.FRAG_BUFFERED,()=>{
+      if(generation!==sourceGeneration)return;
+      if(htmlVideo.readyState>=2){
+        if(!loginSyncPending && !initialSourceSyncDone && !locallyPaused && productionDelayReady()){
+          initialSourceSyncDone=true;
+          // OBS is authoritative. Once its protected delay gate is ready,
+          // ask for the exact media position it is rendering.
+          playAndSyncProduction("initial-hls-sync").catch(showError);
+        }else if(productionDelayWaiting()){
+          showProductionDelayState();
+        }else{
+          setCenter("",false);
+        }
+      }
+    });
+    hls.on(Hls.Events.ERROR,(event,data)=>{
+      if(!data||!data.fatal)return;
+      if(data.type===Hls.ErrorTypes.NETWORK_ERROR){
+        if(currentMediaIsLive===true && htmlVideo.currentTime>0){
+          showStaffEndedBlack(true);
+          return;
+        }
+        try{hls.startLoad()}catch(_){}
+      }else if(data.type===Hls.ErrorTypes.MEDIA_ERROR){
+        try{hls.recoverMediaError()}catch(_){}
+      }else{
+        setCenter("HLS feed could not be played in this browser.",true);
+      }
+    });
+
+    hls.attachMedia(htmlVideo);
+    return;
+  }
+
+  if(htmlVideo.canPlayType("application/vnd.apple.mpegurl")){
+    htmlVideo.src=url;
+    htmlVideo.addEventListener("loadedmetadata",()=>{
+      if(generation!==sourceGeneration)return;
+      if(!loginSyncPending && !initialSourceSyncDone && !locallyPaused && productionDelayReady()){
+        initialSourceSyncDone=true;
+        playAndSyncProduction("initial-hls-sync").catch(showError);
+      }else if(productionDelayWaiting()){
+        showProductionDelayState();
+      }else{
+        if(!locallyPaused&&state&&state.playing)htmlVideo.play().catch(()=>{});
+        setCenter("",false);
+      }
+    },{once:true});
+    htmlVideo.load();
+    return;
+  }
+
+  throw new Error("HLS playback is not supported by this browser.");
+}
+
+htmlVideo.addEventListener("ended",()=>{
+  const t=normalizedType(state&&state.sourceType,state&&state.sourceUrl);
+  if(t==="mp4")markStaffMediaEnded(false,"MP4 ended");
+  else if(t==="hls")markStaffMediaEnded(currentMediaIsLive===true,"HLS ended");
+});
+
+async function buildMp4(s,generation){
+  currentMediaIsLive=false;
+  hideAllMedia();
+  htmlVideo.classList.remove("hidden");
+  setCenter("Loading MP4 feed…",true);
+  htmlVideo.src=String(s.sourceUrl||"").trim();
+  htmlVideo.addEventListener("loadeddata",async()=>{
+    if(generation!==sourceGeneration)return;
+    if(!locallyPaused){
+      const response=await requestProductionSync();
+      if(response && Number(response.sourceRevision||0)===Number(state.sourceRevision||0)){
+        try{htmlVideo.currentTime=Math.max(0,Number(response.positionSeconds)||0)}catch(_){}
+        if(response.productionPlaying)htmlVideo.play().catch(()=>{});
+      }else if(state&&state.playing){
+        htmlVideo.play().catch(()=>{});
+      }
+    }
+    setCenter("",false);
+  },{once:true});
+  htmlVideo.load();
+}
+
+function isHostedHttpsViewer(){
+  try{return location.protocol==="https:" && !!location.origin && location.origin!=="null"}
+  catch(e){return false}
+}
+function staffYoutubeOrigin(){
+  try{return isHostedHttpsViewer()?location.origin:""}catch(e){return ""}
+}
+function staffYoutubeReferrer(){
+  try{return isHostedHttpsViewer()?location.href:""}catch(e){return ""}
+}
+
+async function buildYouTube(s,generation){
+  hideAllMedia();
+  youtubeHost.classList.remove("hidden");
+  setCenter("Loading YouTube feed…",true);
+
+  const id=String(s.sourceId||parseYouTubeId(s.sourceUrl)||"").trim();
+  if(!id)throw new Error("Invalid YouTube URL.");
+
+  youtubeHost.innerHTML="";
+  youtubeBridgeReady=false;
+  youtubeReady=false;
+  youtubeBridgeState=-1;
+  youtubeBridgeDuration=0;
+  youtubeBridgeTime=0;
+  currentMediaIsLive=null;
+
+  const frame=document.createElement("iframe");
+  frame.src=YOUTUBE_BRIDGE_URL+"?tjk_staff=1&_="+Date.now();
+  frame.allow="autoplay; encrypted-media; picture-in-picture";
+  frame.tabIndex=-1;
+  frame.setAttribute("aria-hidden","true");
+  frame.referrerPolicy="strict-origin-when-cross-origin";
+  frame.style.cssText="position:absolute;inset:0;width:100%;height:100%;border:0;background:#000;";
+  youtubeHost.appendChild(frame);
+  youtubeBridgeFrame=frame;
+  youtubePlayer=makeYoutubeBridgeAdapter();
+
+  frame.addEventListener("load",()=>{
+    if(generation!==sourceGeneration)return;
+    // Production bridge accepts LOAD over postMessage.
+    youtubeBridgePost("LOAD",{videoId:id,id,sourceId:id,url:String(s.sourceUrl||"")});
+    // Repeat briefly to cover bridge initialization without Firebase polling.
+    setTimeout(()=>{if(generation===sourceGeneration)youtubeBridgePost("LOAD",{videoId:id,id,sourceId:id,url:String(s.sourceUrl||"")})},350);
+    setTimeout(()=>{if(generation===sourceGeneration)youtubeBridgePost("LOAD",{videoId:id,id,sourceId:id,url:String(s.sourceUrl||"")})},900);
+    setTimeout(()=>{if(generation===sourceGeneration&&!youtubeStaffMediaActuallyReady())youtubeBridgePost("LOAD",{videoId:id,id,sourceId:id,url:String(s.sourceUrl||"")})},1600);
+    setTimeout(()=>{
+      if(generation!==sourceGeneration||staffMediaEnded||locallyPaused||loginSyncPending)return;
+      // Explicit login/source-load synchronization owns YouTube positioning.
+      // This timer may mark readiness, but it must never perform another seek.
+      if(youtubeBridgeReady || youtubeBridgeDuration>0 || youtubeBridgeState>=0){
+        youtubeReady=true;
+        applyVolume();
+      }
+    },1400);
+  });
+}
+
+
+async function startRawViewerConnection(){
+  if(!deviceId||!state)return;
+
+  closeRawPeer();
+  hideAllMedia();
+  rawVideo.classList.remove("hidden");
+  setCenter(normalizedType(state&&state.sourceType,state&&state.sourceUrl)==="youtube"?"Connecting to YouTube WebRTC…":"Connecting to Browser Capture…",true);
+  setConnection("CONNECTING");
+
+  const generation=sourceGeneration;
+
+  rawPc=new RTCPeerConnection({iceServers:[
+    {urls:"stun:stun.l.google.com:19302"},
+    {urls:"stun:stun1.l.google.com:19302"}
+  ]});
+
+  rawPc.addTransceiver("video",{direction:"recvonly"});
+  rawPc.addTransceiver("audio",{direction:"recvonly"});
+
+  rawPc.ontrack=event=>{
+    if(generation!==sourceGeneration)return;
+
+    if(event.streams&&event.streams[0]){
+      rawStream=event.streams[0];
+    }else{
+      if(!rawStream)rawStream=new MediaStream();
+      rawStream.addTrack(event.track);
+    }
+
+    if(!locallyPaused){
+      youtubeHost.classList.add("hidden");
+      htmlVideo.classList.add("hidden");
+      rawVideo.classList.remove("hidden");
+      rawVideo.srcObject=rawStream;
+      applyVolume();
+      rawVideo.play().catch(()=>{});
+      if(event.track && event.track.kind==="video"){
+        processingFeed=false;
+        if(loginProcessingVeil)loginProcessingVeil.style.display="none";
+        setCenter("",false);
+      }
+    }
+  };
+
+  rawPc.onconnectionstatechange=()=>{
+    if(!rawPc||generation!==sourceGeneration)return;
+    const st=rawPc.connectionState;
+    setConnection("WEBRTC "+st.toUpperCase());
+
+    if(st==="connected"){
+      setCenter("",false);
+    }else if(st==="failed"||st==="disconnected"){
+      setCenter("Browser Capture connection interrupted — reconnecting…",true);
+      if(!rawReconnectTimer){
+        rawReconnectTimer=setTimeout(()=>{
+          rawReconnectTimer=null;
+          if(state&&["nfhs","youtube"].includes(normalizedType(state.sourceType,state.sourceUrl))){
+            startRawViewerConnection().catch(showError);
+          }
+        },1500);
+      }
+    }
+  };
+
+  const offer=await rawPc.createOffer();
+  await rawPc.setLocalDescription(offer);
+  await waitIceComplete(rawPc);
+
+  if(generation!==sourceGeneration||!rawPc)return;
+
+  rawRequestId="raw-"+Date.now()+"-"+Math.random().toString(36).slice(2,8);
+  rawLastAnswerRequestId="";
+
+  await fbPut(clientPath("request"),{
+    requestId:rawRequestId,
+    createdAt:Date.now(),
+    quality:quality.value,
+    offer:rawPc.localDescription
+  });
+
+  processFirebaseSnapshot();
+}
+
+async function applyRawAnswer(answer){
+  if(
+    !rawPc ||
+    !answer ||
+    !answer.description ||
+    answer.requestId!==rawRequestId ||
+    answer.requestId===rawLastAnswerRequestId ||
+    rawPc.remoteDescription
+  )return;
+
+  rawLastAnswerRequestId=answer.requestId;
+  await rawPc.setRemoteDescription(answer.description);
+}
+
+async function buildSource(s){
+  setConnection("FIREBASE CONNECTED");
+  destroySource();
+  resetYoutubeStartupMultiSync();
+  initialSourceSyncDone=false;
+  lastRuntimeReadyKey="";
+  state=s;
+
+  const type=normalizedType(s&&s.sourceType,s&&s.sourceUrl);
+  setSourceBadge(type);
+
+  // OFF / empty source is authoritative. Never process a black video frame.
+  if(!type || type==="off"){
+    processingFeed=false;
+    loginSyncPending=false;
+    window.__tjkLoginVeilArm=0;
+    if(loginProcessingVeil)loginProcessingVeil.style.display="none";
+    currentSourceKey=sourceKeyOf(s);
+    hideAllMedia();
+    setSourceBadge("");
+    setCenter("NO VIDEO FEED LOADED",true);
+    return;
+  }
+
+  // YouTube and NFHS are already live WebRTC feeds. They do not need the
+  // legacy PROCESSING VIDEO FEED / timeline synchronization path.
+  if(type!=="youtube" && type!=="nfhs")beginProcessingFeed();
+  else{
+    processingFeed=false;
+    if(loginProcessingVeil)loginProcessingVeil.style.display="none";
+  }
+  currentSourceKey=sourceKeyOf(s);
+  lastProductionStateSignature=JSON.stringify([
+    s&&s.playing,
+    s&&s.commandId||"",
+    s&&s.command||"",
+    s&&s.sourceRevision||0,
+    s&&s.targetLatencySeconds
+  ]);
+  const generation=sourceGeneration;
+
+  if(!type){
+    setCenter("Waiting for production to load a video source…",true);
+    return;
+  }
+
+  try{
+    if(type==="nfhs"){
+      await startRawViewerConnection();
+    }else if(type==="hls"){
+      await buildHls(s,generation);
+    }else if(type==="youtube"){
+      await startRawViewerConnection();
+      initialSourceSyncDone=true;
+    }else if(type==="mp4"){
+      await buildMp4(s,generation);
+    }
+
+
+  }catch(err){
+    showError(err);
+  }
+}
+
+async function handleState(next){
+  const runtime=firebaseView&&firebaseView.runtime;
+  const playerSessionId=String(runtime&&runtime.playerSessionId||"");
+  if(playerSessionId){
+    if(lastProductionPlayerSessionId &&
+       playerSessionId!==lastProductionPlayerSessionId && state){
+
+      const refreshType=normalizedType(state.sourceType,state.sourceUrl);
+
+      if(refreshType==="youtube"){
+        // YouTube only: OBS Browser Source refresh recovery is intentionally manual.
+        // Stop and hide Staff immediately. The user must reload/re-login, which uses
+        // the known-good black-screen login + repeated baseline SYNC sequence.
+        lockYouTubeAfterObsRefresh(playerSessionId);
+      }else{
+        // HLS / MP4 / Browser Capture: preserve the original working baseline
+        // automatic refresh/re-sync behavior exactly.
+        pendingObsRefreshResync=true;
+        beginProcessingFeed();
+      }
+    }
+
+    lastProductionPlayerSessionId=playerSessionId;
+
+    if(!youtubeObsRefreshReloadRequired &&
+       pendingObsRefreshResync &&
+       runtime.delayReady===true &&
+       runtime.delayWaiting!==true){
+      pendingObsRefreshResync=false;
+      setTimeout(()=>processAndSyncRunningFeed("obs-player-refresh").catch(()=>{}),250);
+    }
+  }
+
+  if(youtubeObsRefreshReloadRequired){
+    hideAllMedia();
+    if(loginProcessingVeil)loginProcessingVeil.style.display="block";
+    setCenter("OBS VIDEO FEED WAS REFRESHED - PLEASE RELOAD OR PRESS PLAY / SYNC",true);
+    return;
+  }
+
+  if(!next||typeof next!=="object")return;
+
+  const oldKey=currentSourceKey;
+  state=next;
+  const nextKey=sourceKeyOf(next);
+
+  if(nextKey!==oldKey){
+    locallyPaused=false;
+    setPlayPauseIcon(false);
+    lastProductionCommandId=String(next.commandId||"");
+    await buildSource(next);
+    return;
+  }
+
+  /*
+  Firebase also pushes staff signaling nodes. Do not re-run production
+  transport logic merely because a staff answer/syncResponse changed.
+  */
+  const stateSignature=JSON.stringify([
+    next.playing,
+    next.commandId||"",
+    next.command||"",
+    next.sourceRevision||0,
+    next.targetLatencySeconds
+  ]);
+  if(stateSignature===lastProductionStateSignature)return;
+  lastProductionStateSignature=stateSignature;
+
+  const type=normalizedType(next.sourceType,next.sourceUrl);
+  if(staffMediaEnded)return;
+  const command=String(next.command||"").toLowerCase();
+  const commandId=String(next.commandId||"");
+  const isNewCommand=!!commandId && commandId!==lastProductionCommandId;
+  if(isNewCommand)lastProductionCommandId=commandId;
+
+  /*
+  A production GO LIVE is authoritative: OBS performs its normal seek first,
+  then this viewer asks OBS for the position it actually landed on. The main
+  control-panel SYNC is handled separately as a staff-only sync event.
+  */
+  if(isNewCommand && command==="golive"){
+    locallyPaused=false;
+    setPlayPauseIcon(false);
+    playPause.title="Pause";
+    // Do not race the control panel's post-OBS synchronization. Production
+    // moves first; the later global staff request starts PROCESSING VIDEO FEED
+    // and performs the authoritative multi-pass convergence.
+    return;
+  }
+
+  if(!next.playing){
+    // OBS applies Pause first. Then request its exact stopped frame and copy
+    // that position/state to Staff so every viewer remains on the same frame.
+    if(isNewCommand && command==="pause"){
+      // Pause locally immediately, but leave exact-frame convergence to the
+      // control panel's settled global sync so we do not run two syncs at once.
+      try{
+        if(type==="youtube"&&youtubeReady)youtubePlayer.pauseVideo();
+        else if(type==="nfhs")rawVideo.pause();
+        else htmlVideo.pause();
+      }catch(_){}
+      locallyPaused=false;
+      setPlayPauseIcon(true);
+      playPause.title="Play and sync to production";
+      return;
+    }
+    try{
+      if(type==="youtube"&&youtubeReady)youtubePlayer.pauseVideo();
+      else if(type==="nfhs")rawVideo.pause();
+      else htmlVideo.pause();
+    }catch(_){}
+    return;
+  }
+
+  // A staff-local pause remains local until staff presses Play/SYNC, unless
+  // production issued the authoritative SYNC/GO LIVE handled above.
+  if(locallyPaused)return;
+
+  if(isNewCommand && command==="play"){
+    // Start following playback immediately; exact position convergence is
+    // intentionally deferred to the settled global staff sync from controls.
+    try{
+      if(type==="youtube"&&youtubeReady)youtubePlayer.playVideo();
+      else if(type==="nfhs")rawVideo.play().catch(()=>{});
+      else htmlVideo.play().catch(()=>{});
+    }catch(_){}
+    return;
+  }
+
+  try{
+    if(type==="youtube"&&youtubeReady)youtubePlayer.playVideo();
+    else if(type==="nfhs")rawVideo.play().catch(()=>{});
+    else htmlVideo.play().catch(()=>{});
+  }catch(_){}
+}
+
+function processFirebaseSnapshot(){
+  if(youtubeObsRefreshReloadRequired){
+    hideAllMedia();
+    if(loginProcessingVeil)loginProcessingVeil.style.display="block";
+    setCenter("OBS VIDEO FEED WAS REFRESHED - PLEASE RELOAD OR PRESS PLAY / SYNC",true);
+    return;
+  }
+  const next=firebaseView&&firebaseView.state;
+  if(next&&typeof next==="object"){
+    handleState(next).catch(showError);
+  }
+
+  const own=
+    firebaseView &&
+    firebaseView.staff &&
+    firebaseView.staff.clients &&
+    firebaseView.staff.clients[clientId];
+
+  if(own&&own.answer){
+    applyRawAnswer(own.answer).catch(showError);
+  }
+
+  if(own&&own.syncResponse){
+    handleSyncResponse(own.syncResponse);
+  }
+
+  const runtime=currentRuntime();
+  if(runtime){
+    const runtimeKey=String(runtime.sourceRevision||0)+"|"+String(runtime.delayReady)+"|"+String(runtime.delayWaiting)+"|"+String(runtime.dvrUnavailable);
+    if(runtimeKey!==lastRuntimeReadyKey){
+      lastRuntimeReadyKey=runtimeKey;
+      if(runtime.dvrUnavailable && runtime.delaySupported!==false){
+        showProductionDelayState();
+      }else if(runtime.delayWaiting){
+        showProductionDelayState();
+      }else if(runtime.delayReady){
+        const type=normalizedType(state&&state.sourceType,state&&state.sourceUrl);
+        if((type==="hls"||type==="youtube") && !locallyPaused && !loginSyncPending){
+          initialSourceSyncDone=true;
+          playAndSyncProduction("runtime-delay-ready").catch(showError);
+        }
+      }
+    }
+  }
+
+  const globalStaffSync=
+    firebaseView &&
+    firebaseView.staff &&
+    firebaseView.staff.syncRequest;
+
+  if(
+    globalStaffSync &&
+    globalStaffSync.requestId &&
+    globalStaffSync.requestId!==lastGlobalStaffSyncRequestId
+  ){
+    lastGlobalStaffSyncRequestId=globalStaffSync.requestId;
+
+    /*
+    Main control-panel SYNC is staff-only. It never changes OBS.
+    Each viewer independently asks OBS for its current position and follows it.
+    */
+    // Admin/global synchronization deliberately uses the visible processing path.
+    // This mirrors the more reliable login behavior: process, converge, then reveal.
+    processAndSyncRunningFeed("control-panel-staff-sync").catch(showError);
+  }
+}
+
+function openFirebaseStream(){
+  closeFirebaseStream();
+  firebaseView={};
+
+  firebaseStream=new EventSource(streamPath());
+
+  const handle=(ev,isPatch)=>{
+    try{
+      const msg=JSON.parse(ev.data||"{}");
+      firebaseView=setNestedValue(firebaseView,msg.path,msg.data,isPatch);
+      processFirebaseSnapshot();
+    }catch(err){
+      console.warn("Firebase event:",err);
+    }
+  };
+
+  firebaseStream.addEventListener("put",ev=>handle(ev,false));
+  firebaseStream.addEventListener("patch",ev=>handle(ev,true));
+
+  firebaseStream.onopen=()=>{
+    setConnection("FIREBASE CONNECTED");
+  };
+  firebaseStream.onerror=()=>{
+    if(!rawPc||rawPc.connectionState!=="connected"){
+      setConnection("FIREBASE RECONNECTING");
+    }
+  };
+}
+
+function closeFirebaseStream(){
+  if(firebaseStream){
+    try{firebaseStream.close()}catch(_){}
+    firebaseStream=null;
+  }
+}
+
+function showError(err){
+  console.error(err);
+  setCenter((err&&err.message)||String(err)||"Playback error.",true);
+  setConnection("ERROR");
+}
+
+async function connectToDevice(){
+  const next=cleanDeviceId(deviceInput.value);
+  if(!next){
+    modalStatus.textContent="Enter a Device ID.";
+    return;
+  }
+
+  modalStatus.textContent="Connecting…";
+
+  if(deviceId&&clientId){
+    try{await fbDelete(clientPath("request"))}catch(_){}
+    try{await fbDelete(clientPath("answer"))}catch(_){}
+    try{await fbDelete(clientPath("syncRequest"))}catch(_){}
+    try{await fbDelete(clientPath("syncResponse"))}catch(_){}
+  }
+
+  destroySource();
+  closeFirebaseStream();
+
+  deviceId=next;
+  loginSyncPending=true;
+  if(loginProcessingVeil)loginProcessingVeil.style.display="block";
+  const loginVeilArm=Date.now();
+  window.__tjkLoginVeilArm=loginVeilArm;
+  setTimeout(()=>{
+    if(window.__tjkLoginVeilArm!==loginVeilArm || !loginSyncPending)return;
+    loginSyncPending=false;
+    processingFeed=false;
+    if(loginProcessingVeil)loginProcessingVeil.style.display="none";
+    const t=normalizedType(state&&state.sourceType,state&&state.sourceUrl);
+    if(!t || t==="off"){
+      hideAllMedia();
+      setSourceBadge("");
+      setCenter("NO VIDEO FEED LOADED",true);
+      return;
+    }
+    if(t==="youtube"||t==="nfhs")rawVideo.classList.remove("hidden");
+    else if(t==="hls"||t==="mp4")htmlVideo.classList.remove("hidden");
+    setCenter("",false);
+  },4500);
+  processingFeed=false;
+  setCenter("",false);
+  localStorage.setItem(DEVICE_STORAGE_KEY,deviceId);
+  clientId=makeClientId();
+  currentSourceKey="";
+  state=null;
+
+  openFirebaseStream();
+  deviceModal.style.display="none";
+  modalStatus.textContent="";
+  setCenter("Connected to Device ID.\nWaiting for the production video source…",true);
+}
+
+async function changeQuality(){
+  localStorage.setItem(QUALITY_STORAGE_KEY,quality.value);
+
+  const type=normalizedType(state&&state.sourceType,state&&state.sourceUrl);
+
+  if(type==="nfhs"){
+    setCenter("Changing Browser Capture quality…",true);
+    await startRawViewerConnection();
+  }else if(type==="hls"){
+    applyHlsQuality();
+  }else if(type==="youtube"){
+    setCenter("Changing WebRTC quality…",true);
+    await startRawViewerConnection();
+  }
+  // MP4 has one encoded source quality, so selection cannot change the file.
+}
+
+function toggleMute(){
+  setMuted(!isMuted());
+}
+
+async function toggleFullscreen(){
+  const target=document.getElementById("viewer")||document.documentElement;
+  try{
+    const active=document.fullscreenElement||document.webkitFullscreenElement;
+    if(active){
+      if(document.exitFullscreen)await document.exitFullscreen();
+      else if(document.webkitExitFullscreen)document.webkitExitFullscreen();
+      return;
+    }
+    if(target.requestFullscreen){
+      await target.requestFullscreen();
+      revealFullscreenUi();
+      return;
+    }
+    if(target.webkitRequestFullscreen){
+      target.webkitRequestFullscreen();
+      revealFullscreenUi();
+      return;
+    }
+  }catch(err){
+    console.warn("Wix iframe blocked fullscreen:",err);
+  }
+
+  // Parent Wix iframe permissions cannot be overridden from inside this page.
+  // Open a standalone copy carrying the already-authenticated Device ID so the
+  // fullscreen tab does NOT ask the staff member to log in again.
+  try{
+    const u=new URL(window.location.href);
+    const activeDevice=cleanDeviceId(deviceId||localStorage.getItem(DEVICE_STORAGE_KEY)||"");
+    if(activeDevice){
+      u.searchParams.set("device",activeDevice);
+      u.searchParams.set("standalone","1");
+    }
+    const w=window.open(u.toString(),"_blank");
+    if(!w)setCenter("FULLSCREEN BLOCKED BY WIX / BROWSER\nAllow pop-ups or open the Staff Viewer directly.",true);
+  }catch(err){
+    console.warn("Standalone viewer fallback:",err);
+  }
+}
+
+function showDeviceDialog(){
+  deviceInput.value=deviceId||localStorage.getItem(DEVICE_STORAGE_KEY)||"";
+  deviceModal.style.display="flex";
+  setTimeout(()=>deviceInput.focus(),0);
+}
+
+rawVideo.addEventListener("play",()=>{
+  const t=normalizedType(state&&state.sourceType,state&&state.sourceUrl);
+  if(t==="youtube"||t==="nfhs"){locallyPaused=false;setPlayPauseIcon(false);}
+});
+rawVideo.addEventListener("pause",()=>{
+  const t=normalizedType(state&&state.sourceType,state&&state.sourceUrl);
+  if((t==="youtube"||t==="nfhs")&&!staffMediaEnded){locallyPaused=true;setPlayPauseIcon(true);}
+});
+htmlVideo.addEventListener("play",()=>{
+  const t=normalizedType(state&&state.sourceType,state&&state.sourceUrl);
+  if(t==="hls"||t==="mp4"){locallyPaused=false;setPlayPauseIcon(false);}
+});
+htmlVideo.addEventListener("pause",()=>{
+  const t=normalizedType(state&&state.sourceType,state&&state.sourceUrl);
+  if((t==="hls"||t==="mp4")&&!staffMediaEnded){locallyPaused=true;setPlayPauseIcon(true);}
+});
+
+playPause.onclick=async()=>{
+  if(youtubeObsRefreshReloadRequired){
+    try{await recoverYouTubeRefreshManually()}catch(err){showError(err)}
+    return;
+  }
+  if(locallyPaused){
+    const type=normalizedType(state&&state.sourceType,state&&state.sourceUrl);
+    locallyPaused=false;
+    if(type==="youtube"||type==="nfhs"){
+      locallyPaused=false;
+      if(rawStream)rawVideo.srcObject=rawStream;
+      applyVolume();
+      rawVideo.play().catch(showError);
+      setCenter("",false);
+    }else{
+      playAndSyncProduction("resume").catch(showError);
+    }
+  }else pauseLocal();
+};
+syncButton.onclick=()=>{
+  if(normalizedType(state&&state.sourceType,state&&state.sourceUrl)==="youtube"){
+    setCenter("YouTube is already on the shared WebRTC timeline.",true);
+    setTimeout(()=>setCenter("",false),700);
+    return;
+  }
+  if(youtubeObsRefreshReloadRequired){
+    recoverYouTubeRefreshManually().catch(showError);
+    return;
+  }
+  if(!staffMediaEnded){
+    runExactManualSyncFunction("manual-sync",true).catch(showError);
+  }
+};
+muteButton.onclick=toggleMute;
+volume.oninput=applyVolume;
+quality.onchange=()=>changeQuality().catch(showError);
+fullscreen.onclick=toggleFullscreen;
+changeDevice.onclick=showDeviceDialog;
+connectButton.onclick=()=>connectToDevice().catch(showError);
+deviceInput.addEventListener("keydown",e=>{
+  if(e.key==="Enter")connectToDevice().catch(showError);
+});
+["mousemove","pointermove","pointerdown","keydown"].forEach(ev=>{
+  document.addEventListener(ev,revealFullscreenUi,{passive:true});
+});
+document.addEventListener("fullscreenchange",()=>{
+  fullscreen.textContent="⛶";
+  fullscreen.title=document.fullscreenElement?"Exit Full Screen":"Full Screen";
+  if(document.fullscreenElement)revealFullscreenUi();
+  else{
+    document.body.classList.remove("fullscreen-idle");
+    if(fullscreenUiTimer)clearTimeout(fullscreenUiTimer);
+  }
+});
+
+window.addEventListener("beforeunload",()=>{
+  if(autoSyncTimer)clearInterval(autoSyncTimer);
+  closeFirebaseStream();
+  destroySource();
+
+  if(deviceId&&clientId){
+    for(const suffix of ["request","answer","syncRequest","syncResponse"]){
+      fetch(clientPath(suffix),{
+        method:"DELETE",
+        keepalive:true,
+        cache:"no-store"
+      }).catch(()=>{});
+    }
+  }
+});
+
+(function init(){
+  clientId=makeClientId();
+
+  const savedQuality=localStorage.getItem(QUALITY_STORAGE_KEY);
+  if(["auto","1080","720","540","480","360"].includes(savedQuality))quality.value=savedQuality;
+  else quality.value="1080";
+
+  const savedVolume=Number(localStorage.getItem(VOLUME_STORAGE_KEY));
+  if(Number.isFinite(savedVolume)&&savedVolume>=0&&savedVolume<=100){
+    volume.value=String(savedVolume);
+  }
+
+  applyVolume();
+  startAutoSyncTimer();
+
+  const savedDevice=cleanDeviceId(localStorage.getItem(DEVICE_STORAGE_KEY)||"");
+  let handoffDevice="";
+  let standaloneHandoff=false;
+  try{
+    const q=new URLSearchParams(window.location.search||"");
+    standaloneHandoff=q.get("standalone")==="1";
+    handoffDevice=cleanDeviceId(q.get("device")||"");
+  }catch(_){}
+
+  deviceInput.value=handoffDevice||savedDevice;
+
+  // A standalone fullscreen tab opened by an already-connected viewer inherits
+  // that Device ID and connects silently. This is not used for normal page loads.
+  if(standaloneHandoff && handoffDevice){
+    deviceModal.style.display="none";
+    setTimeout(()=>{
+      deviceInput.value=handoffDevice;
+      connectToDevice().catch(showError);
+    },150);
+    return;
+  }
+
+  // Wix sometimes boots the embed twice. The first document shows the login.
+  // An immediate replacement document reuses the saved ID after it settles,
+  // instead of showing a second login prompt.
+  const wixBootKey="tjk-staff-viewer-wix-boot-v3";
+  const now=Date.now();
+  let previousBoot=0;
+  try{previousBoot=Number(sessionStorage.getItem(wixBootKey)||0)}catch(_){}
+  try{sessionStorage.setItem(wixBootKey,String(now))}catch(_){}
+
+  const wixReplacement=!!savedDevice && previousBoot>0 && (now-previousBoot)<5000;
+  if(wixReplacement){
+    deviceModal.style.display="none";
+    setTimeout(()=>{
+      deviceInput.value=savedDevice;
+      connectToDevice().catch(showError);
+    },750);
+  }else{
+    showDeviceDialog();
+  }
+})();
+
+["loadedmetadata","durationchange","playing"].forEach(ev=>{
+  htmlVideo.addEventListener(ev,()=>forceHtmlCaptionsOff(htmlVideo));
+  rawVideo.addEventListener(ev,()=>forceHtmlCaptionsOff(rawVideo));
+});
+setInterval(()=>{
+  forceHtmlCaptionsOff(htmlVideo);
+  forceHtmlCaptionsOff(rawVideo);
+  try{if(youtubeReady&&youtubePlayer)youtubeBridgePost("CAPTIONS_OFF")}catch(_){}
+},500);
+</script>
+</body>
+</html>
