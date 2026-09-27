@@ -391,11 +391,15 @@
                  * displays its matching page or its normal 404 page.
                  */
                 if (resourceUrl) {
-                    window.location.replace(
+                    /*
+                     * Keep the clean route in the browser address bar.
+                     * The physical GitHub folder/file is loaded only inside
+                     * the existing full-page iframe.
+                     */
+                    websiteFrame.src =
                         resourceUrl +
                         queryString +
-                        (window.location.hash || "")
-                    );
+                        (window.location.hash || "");
                     return;
                 }
 
