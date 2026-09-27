@@ -108,6 +108,24 @@
             const websiteFrame =
                 document.getElementById("websiteFrame");
 
+            let currentFrameIsGitHubResource = false;
+
+            websiteFrame.addEventListener("load", () => {
+                if (!currentFrameIsGitHubResource) {
+                    return;
+                }
+
+                try {
+                    const childTitle =
+                        websiteFrame.contentDocument &&
+                        websiteFrame.contentDocument.title;
+
+                    if (childTitle && childTitle.trim()) {
+                        document.title = childTitle.trim();
+                    }
+                } catch (_) {}
+            });
+
 
             /* =====================================================
                PAGE ROUTING
@@ -379,6 +397,22 @@
                 );
             }
 
+            function applyWixSeoTitle(websitePath) {
+                const path =
+                    String(websitePath || "/")
+                        .replace(/\/+$/, "") || "/";
+
+                const wixSeoTitles = {
+                    "/": "Home | TJK152",
+                    "/shop": "TJK SHOP | TJK152",
+                    "/network": "TJK NETWORK"
+                };
+
+                document.title =
+                    wixSeoTitles[path.toLowerCase()] ||
+                    "TJK152";
+            }
+
             function loadWebsite() {
                 const websitePath = getWebsitePath();
                 const queryString = window.location.search || "";
@@ -394,6 +428,8 @@
                  * displays its matching page or its normal 404 page.
                  */
                 if (resourceUrl) {
+                    currentFrameIsGitHubResource = true;
+
                     /*
                      * Keep the clean route in the browser address bar.
                      * The physical GitHub folder/file is loaded only inside
@@ -405,6 +441,9 @@
                         (window.location.hash || "");
                     return;
                 }
+
+                currentFrameIsGitHubResource = false;
+                applyWixSeoTitle(websitePath);
 
                 websiteFrame.src =
                     WEBSITE_ORIGIN +
