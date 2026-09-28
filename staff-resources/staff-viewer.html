@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="referrer" content="strict-origin-when-cross-origin">
-<title>TJK NETWORK Staff Video Viewer</title>
+<title>STAFF VIEWER</title>
 <style>
 :root{
   --blue:#004CBF;
@@ -279,6 +279,7 @@ body.fullscreen-idle #topBar{opacity:0;pointer-events:none;}
 
 const FIREBASE_BASE="https://tjk-network-controls-default-rtdb.firebaseio.com";
 const DEVICE_STORAGE_KEY="tjk-staff-video-device-id-v2";
+const DEVICE_TAB_SESSION_KEY="tjk-staff-video-device-tab-session-v1";
 const CLIENT_STORAGE_KEY="tjk-staff-video-client-id-v2";
 const QUALITY_STORAGE_KEY="tjk-staff-video-quality-v2";
 const VOLUME_STORAGE_KEY="tjk-staff-video-volume-v2";
@@ -2178,7 +2179,8 @@ async function connectToDevice(){
   },4500);
   processingFeed=false;
   setCenter("",false);
-  localStorage.setItem(DEVICE_STORAGE_KEY,deviceId);
+  try{sessionStorage.setItem(DEVICE_TAB_SESSION_KEY,deviceId)}catch(_){}
+  try{localStorage.removeItem(DEVICE_STORAGE_KEY)}catch(_){}
   clientId=makeClientId();
   currentSourceKey="";
   state=null;
@@ -2238,7 +2240,7 @@ async function toggleFullscreen(){
   // fullscreen tab does NOT ask the staff member to log in again.
   try{
     const u=new URL(window.location.href);
-    const activeDevice=cleanDeviceId(deviceId||localStorage.getItem(DEVICE_STORAGE_KEY)||"");
+    const activeDevice=cleanDeviceId(deviceId||sessionStorage.getItem(DEVICE_TAB_SESSION_KEY)||"");
     if(activeDevice){
       u.searchParams.set("device",activeDevice);
       u.searchParams.set("standalone","1");
@@ -2251,7 +2253,7 @@ async function toggleFullscreen(){
 }
 
 function showDeviceDialog(){
-  deviceInput.value=deviceId||localStorage.getItem(DEVICE_STORAGE_KEY)||"";
+  deviceInput.value=deviceId||sessionStorage.getItem(DEVICE_TAB_SESSION_KEY)||"";
   deviceModal.style.display="flex";
   setTimeout(()=>deviceInput.focus(),0);
 }
@@ -2359,7 +2361,8 @@ window.addEventListener("beforeunload",()=>{
   applyVolume();
   startAutoSyncTimer();
 
-  const savedDevice=cleanDeviceId(localStorage.getItem(DEVICE_STORAGE_KEY)||"");
+  // Login belongs to this tab session only: refresh keeps it; a new tab asks again.
+  const savedDevice=cleanDeviceId(sessionStorage.getItem(DEVICE_TAB_SESSION_KEY)||"");
   let handoffDevice="";
   let standaloneHandoff=false;
   try{
@@ -2368,36 +2371,21 @@ window.addEventListener("beforeunload",()=>{
     handoffDevice=cleanDeviceId(q.get("device")||"");
   }catch(_){}
 
-  deviceInput.value=handoffDevice||savedDevice;
-
-  // A standalone fullscreen tab opened by an already-connected viewer inherits
-  // that Device ID and connects silently. This is not used for normal page loads.
+  // The fullscreen fallback is an intentional authenticated handoff.
   if(standaloneHandoff && handoffDevice){
+    try{sessionStorage.setItem(DEVICE_TAB_SESSION_KEY,handoffDevice)}catch(_){}
+    deviceInput.value=handoffDevice;
     deviceModal.style.display="none";
-    setTimeout(()=>{
-      deviceInput.value=handoffDevice;
-      connectToDevice().catch(showError);
-    },150);
+    setTimeout(()=>connectToDevice().catch(showError),150);
     return;
   }
 
-  // Wix sometimes boots the embed twice. The first document shows the login.
-  // An immediate replacement document reuses the saved ID after it settles,
-  // instead of showing a second login prompt.
-  const wixBootKey="tjk-staff-viewer-wix-boot-v3";
-  const now=Date.now();
-  let previousBoot=0;
-  try{previousBoot=Number(sessionStorage.getItem(wixBootKey)||0)}catch(_){}
-  try{sessionStorage.setItem(wixBootKey,String(now))}catch(_){}
-
-  const wixReplacement=!!savedDevice && previousBoot>0 && (now-previousBoot)<5000;
-  if(wixReplacement){
+  if(savedDevice){
+    deviceInput.value=savedDevice;
     deviceModal.style.display="none";
-    setTimeout(()=>{
-      deviceInput.value=savedDevice;
-      connectToDevice().catch(showError);
-    },750);
+    setTimeout(()=>connectToDevice().catch(showError),150);
   }else{
+    deviceInput.value="";
     showDeviceDialog();
   }
 })();
