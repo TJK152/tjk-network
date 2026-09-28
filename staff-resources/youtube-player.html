@@ -4,10 +4,10 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="referrer" content="strict-origin-when-cross-origin">
-<title>TJK NETWORK YouTube WebRTC Sender</title>
+<title>YOUTUBE PLAYER</title>
 <style>
 html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#000;color:#fff;font-family:Arial,sans-serif}
-#stage{position:fixed;left:0;right:0;top:0;bottom:74px;background:#000;overflow:hidden}
+#stage{position:fixed;left:0;right:0;top:0;bottom:77px;background:#000;overflow:hidden}
 #youtubeBridge{position:absolute;inset:0;width:100%;height:100%;border:0;background:#000;pointer-events:none}
 #endedScreen{
   position:absolute;inset:0;z-index:10;
@@ -27,16 +27,29 @@ button{margin-top:10px;min-height:50px;background:#fff;color:#0326FF;cursor:poin
 button:hover{background:#0093FF;color:#fff}
 #status{min-height:20px;margin-top:10px;font-weight:bold;white-space:pre-wrap}
 #toolbar{
-  position:fixed;left:0;right:0;bottom:0;height:74px;z-index:30;
+  position:fixed;left:0;right:0;bottom:0;height:77px;z-index:30;
   display:flex;align-items:center;justify-content:center;gap:12px;
   box-sizing:border-box;padding:10px 16px;
   background:#004CBF;border-top:5px solid #007DFF;
 }
 #toolbar button{
-  width:auto;min-width:190px;margin:0;padding:9px 16px;min-height:48px;
-  border:4px solid #007DFF;border-radius:9px;background:#fff;color:#0326FF;
+  width:auto;margin:0;padding:7px 13px;height:52px;min-height:52px;
+  border:4px solid #007DFF;border-radius:10px;background:#fff;color:#0326FF;
+  font-weight:bold;
 }
-#toolbar button:hover{background:#0093FF;color:#fff}
+#captureBtn{min-width:230px}
+#changeBtn{min-width:112px}
+#fullscreenBtn{
+  width:52px;min-width:52px;height:52px;min-height:52px;padding:0;
+  display:flex;align-items:center;justify-content:center;flex:0 0 52px;
+  font-size:23px;
+}
+#toolbar button:not(:disabled):hover{background:#0093FF;color:#fff}
+#toolbar button:disabled{
+  opacity:.45;
+  cursor:default!important;
+  pointer-events:none!important;
+}
 .hidden{display:none!important}
 
 /* While browser fullscreen is active, only the video surface remains.
@@ -53,9 +66,9 @@ button:hover{background:#0093FF;color:#fff}
   <div id="endedScreen"></div>
 </div>
 <div id="toolbar" class="hidden">
-  <button id="captureBtn">START / RESTART WEB-RTC</button>
-  <button id="fullscreenBtn">FULL SCREEN</button>
-  <button id="changeBtn">DEVICE ID</button>
+  <button id="captureBtn" type="button">START / RESTART WEB-RTC</button>
+  <button id="changeBtn" type="button">DEVICE ID</button>
+  <button id="fullscreenBtn" type="button" title="Full Screen">⛶</button>
 </div>
 <div id="gate">
   <div id="card">
@@ -70,6 +83,7 @@ button:hover{background:#0093FF;color:#fff}
 "use strict";
 const FIREBASE_BASE="https://tjk-network-controls-default-rtdb.firebaseio.com";
 const DEVICE_KEY="tjk-youtube-sender-device-id-v1";
+const DEVICE_TAB_SESSION_KEY="tjk-youtube-sender-device-tab-session-v1";
 const VIDEO_WIDTH=1920,VIDEO_HEIGHT=1080,VIDEO_FPS=30,VIDEO_MAX_BITRATE=5500000;
 
 const gate=document.getElementById("gate"),deviceInput=document.getElementById("deviceInput");
@@ -169,6 +183,20 @@ function publishYouTubeRuntime(info={},force=false){
 }
 
 function setStatus(s){statusEl.textContent=s}
+function youtubeFeedLoaded(){
+  return !!(
+    state &&
+    String(state.sourceType)==="youtube" &&
+    String(state.sourceId||state.sourceUrl||"").trim()
+  );
+}
+function updateCaptureButtonState(){
+  const enabled=youtubeFeedLoaded();
+  captureBtn.disabled=!enabled;
+  captureBtn.title=enabled
+    ?"Start / Restart WebRTC"
+    :"No YouTube feed loaded";
+}
 function clearEndedScreen(){
   pendingEndedState=false;
   endedScreen.textContent="";
@@ -393,6 +421,8 @@ async function processState(){
     showNoFeedScreen();
     setStatus("NO VIDEO FEED LOADED");
   }
+  updateCaptureButtonState();
+
   const ans=firebaseView&&firebaseView.youtubeRaw&&firebaseView.youtubeRaw.answer;
   if(ans&&obsPc&&ans.sessionId===obsSessionId&&ans.description&&!obsPc.remoteDescription){await obsPc.setRemoteDescription(ans.description);obsAnswerSessionId=ans.sessionId;setStatus("OBS WebRTC connected / negotiating.")}
   await processStaffRequests();
@@ -409,6 +439,11 @@ function closeObs(){if(obsPc)try{obsPc.close()}catch(e){}obsPc=null;obsSessionId
 function closeStaff(id){const p=staffPeers.get(id);if(p){try{p.close()}catch(e){}staffPeers.delete(id)}}
 async function startCapture(){
   if(!deviceId){setStatus("Enter Device ID first.");return}
+  if(!youtubeFeedLoaded()){
+    updateCaptureButtonState();
+    setStatus("NO VIDEO FEED LOADED");
+    return;
+  }
   try{
     setStatus("Choose THIS TAB in the browser capture picker and enable tab audio.");
     const s=await navigator.mediaDevices.getDisplayMedia({
@@ -468,7 +503,8 @@ async function connect(){
   const id=cleanDeviceId(deviceInput.value);
   if(!id){setStatus("Enter a valid Device ID.");return}
   deviceId=id;
-  localStorage.setItem(DEVICE_KEY,id);
+  try{sessionStorage.setItem(DEVICE_TAB_SESSION_KEY,id)}catch(_){}
+  try{localStorage.removeItem(DEVICE_KEY)}catch(_){}
 
   // Connecting means exactly that: attach to this Device ID, reveal the player,
   // and let the selected YouTube source load/autoplay. WebRTC capture is NOT
@@ -480,6 +516,7 @@ async function connect(){
   toolbar.classList.remove("hidden");
   setStatus("NO VIDEO FEED LOADED");
   showNoFeedScreen();
+  updateCaptureButtonState();
 }
 connectBtn.onclick=connect;captureBtn.onclick=startCapture;
 
@@ -506,7 +543,7 @@ async function enterFullscreen(){
   // Wix fallback: open this sender standalone and hand off the confirmed Device ID.
   try{
     const u=new URL(window.location.href);
-    const activeDevice=cleanDeviceId(deviceId||localStorage.getItem(DEVICE_KEY)||"");
+    const activeDevice=cleanDeviceId(deviceId||sessionStorage.getItem(DEVICE_TAB_SESSION_KEY)||"");
     if(activeDevice){
       u.searchParams.set("device",activeDevice);
       u.searchParams.set("standalone","1");
@@ -522,7 +559,8 @@ fullscreenBtn.onclick=enterFullscreen;
 
 function updateFullscreenButton(){
   const active=!!(document.fullscreenElement||document.webkitFullscreenElement);
-  fullscreenBtn.textContent=active?"EXIT FULL SCREEN":"FULL SCREEN";
+  fullscreenBtn.textContent="⛶";
+  fullscreenBtn.title=active?"Exit Full Screen":"Full Screen";
 }
 document.addEventListener("fullscreenchange",updateFullscreenButton);
 document.addEventListener("webkitfullscreenchange",updateFullscreenButton);
@@ -534,7 +572,9 @@ changeBtn.onclick=()=>{
   connectBtn.classList.remove("hidden");
 };
 try{
-  const savedDevice=cleanDeviceId(localStorage.getItem(DEVICE_KEY)||"");
+  // Login belongs to this browser tab only:
+  // refresh/reload keeps it, while a newly opened tab asks for a fresh login.
+  const savedDevice=cleanDeviceId(sessionStorage.getItem(DEVICE_TAB_SESSION_KEY)||"");
   let handoffDevice="";
   let standaloneHandoff=false;
   try{
@@ -543,35 +583,29 @@ try{
     handoffDevice=cleanDeviceId(q.get("device")||"");
   }catch(_){}
 
-  deviceInput.value=handoffDevice||savedDevice;
-
-  // Fullscreen handoff from an already-authenticated player: no second login.
+  // Fullscreen fallback is an intentional authenticated handoff.
   if(standaloneHandoff && handoffDevice){
+    try{sessionStorage.setItem(DEVICE_TAB_SESSION_KEY,handoffDevice)}catch(_){}
+    deviceInput.value=handoffDevice;
+    gate.classList.remove("visible");
+    gate.classList.add("hidden");
+    setTimeout(()=>connect(),150);
+  }else if(savedDevice){
+    deviceInput.value=savedDevice;
+    gate.classList.remove("visible");
+    gate.classList.add("hidden");
     setTimeout(()=>connect(),150);
   }else{
-    // Wix may instantiate the embed twice. Only an immediate replacement boot
-    // silently reuses the saved ID; a normal page visit still shows one login.
-    const wixBootKey="tjk-youtube-sender-wix-boot-v1";
-    const now=Date.now();
-    let previousBoot=0;
-    try{previousBoot=Number(sessionStorage.getItem(wixBootKey)||0)}catch(_){}
-    try{sessionStorage.setItem(wixBootKey,String(now))}catch(_){}
-
-    const wixReplacement=!!savedDevice && previousBoot>0 && (now-previousBoot)<5000;
-    if(wixReplacement){
-      // Keep the gate hidden from the first paint through authenticated reconnect.
-      setTimeout(()=>connect(),750);
-    }else{
-      // Genuine page launch: show exactly one Device ID prompt.
-      gate.classList.remove("hidden");
-      gate.classList.add("visible");
-    }
+    deviceInput.value="";
+    gate.classList.remove("hidden");
+    gate.classList.add("visible");
   }
 }catch(e){
-  // Fail safe: if initialization itself fails, still allow manual login.
   gate.classList.remove("hidden");
   gate.classList.add("visible");
 }
+updateCaptureButtonState();
+
 window.addEventListener("pagehide",()=>{
   if(!deviceId)return;
   try{fetch(senderPresencePath(),{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({online:false,deviceId,lastSeen:Date.now(),page:"youtube-player"}),cache:"no-store",keepalive:true}).catch(()=>{})}catch(_){}
