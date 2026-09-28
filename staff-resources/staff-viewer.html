@@ -224,6 +224,33 @@ button:disabled,select:disabled{opacity:.45}
 body.fullscreen-idle #controls,
 body.fullscreen-idle #topBar{opacity:0;pointer-events:none;}
 #controls,#topBar{transition:opacity 200ms ease;}
+
+/* HLS DIAGNOSTICS — display-only; does not change playback/sync behavior. */
+#hlsDiagnostics{
+  position:absolute;
+  left:12px;
+  top:58px;
+  z-index:20;
+  width:min(520px,calc(100vw - 24px));
+  max-height:calc(100% - 78px);
+  overflow:auto;
+  display:none;
+  padding:10px 12px;
+  border:2px solid var(--border);
+  border-radius:8px;
+  background:rgba(0,0,0,.90);
+  color:#fff;
+  font:12px/1.35 Arial,sans-serif;
+  white-space:pre-wrap;
+  word-break:break-word;
+  pointer-events:auto;
+}
+#sourceBadge.hlsDiagnosticAvailable{
+  pointer-events:auto;
+  cursor:pointer;
+  user-select:none;
+}
+
 </style>
 </head>
 <body>
@@ -237,6 +264,7 @@ body.fullscreen-idle #topBar{opacity:0;pointer-events:none;}
   <div id="centerStatus">Enter the Device ID to connect.</div>
   <div id="connectionStatus">DISCONNECTED</div>
   <div id="sourceBadge">OFF</div>
+  <div id="hlsDiagnostics" aria-live="polite"></div>
 </div>
 
 <div id="controls">
@@ -293,6 +321,7 @@ const loginProcessingVeil=document.getElementById("loginProcessingVeil");
 const centerStatus=document.getElementById("centerStatus");
 const connectionStatus=document.getElementById("connectionStatus");
 const sourceBadge=document.getElementById("sourceBadge");
+const hlsDiagnostics=document.getElementById("hlsDiagnostics");
 const deviceModal=document.getElementById("deviceModal");
 const deviceInput=document.getElementById("deviceInput");
 const connectButton=document.getElementById("connectButton");
@@ -826,11 +855,140 @@ function setPlayPauseIcon(paused){
   playPause.textContent=paused?"▶︎":"Ⅱ";
   playPause.title=paused?"Play":"Pause";
 }
+
+/*
+HLS DIAGNOSTICS
+Display-only instrumentation for isolating black-screen clients.
+It never seeks, plays, pauses, reloads, changes quality, or changes sync state.
+Tap the HLS / HUDL badge to show/hide the panel.
+*/
+let hlsDiagnosticVisible=false;
+let hlsDiagnosticLastEvent="none";
+let hlsDiagnosticLastError="none";
+let hlsDiagnosticPath="none";
+let hlsDiagnosticTimer=null;
+
+function hlsTimeRanges(ranges){
+  try{
+    const out=[];
+    for(let i=0;i<ranges.length;i++){
+      out.push(Number(ranges.start(i)).toFixed(2)+"-"+Number(ranges.end(i)).toFixed(2));
+    }
+    return out.length?out.join(", "):"none";
+  }catch(_){return "error"}
+}
+
+function hlsReadyStateName(n){
+  return ["HAVE_NOTHING","HAVE_METADATA","HAVE_CURRENT_DATA","HAVE_FUTURE_DATA","HAVE_ENOUGH_DATA"][Number(n)]||String(n);
+}
+
+function hlsNetworkStateName(n){
+  return ["NETWORK_EMPTY","NETWORK_IDLE","NETWORK_LOADING","NETWORK_NO_SOURCE"][Number(n)]||String(n);
+}
+
+function renderHlsDiagnostics(){
+  if(!hlsDiagnostics || !hlsDiagnosticVisible)return;
+  const type=normalizedType(state&&state.sourceType,state&&state.sourceUrl);
+  if(type!=="hls"){
+    hlsDiagnostics.style.display="none";
+    hlsDiagnosticVisible=false;
+    return;
+  }
+
+  let hlsState="n/a";
+  let hlsLevel="n/a";
+  let levels="n/a";
+  try{
+    if(hls){
+      hlsState="attached="+!!hls.media;
+      hlsLevel=String(hls.currentLevel);
+      levels=Array.isArray(hls.levels)?String(hls.levels.length):"0";
+    }
+  }catch(_){}
+
+  const lines=[
+    "HLS DIAGNOSTICS — tap HLS / HUDL badge to close",
+    "",
+    "Path: "+hlsDiagnosticPath,
+    "Last event: "+hlsDiagnosticLastEvent,
+    "Last error: "+hlsDiagnosticLastError,
+    "",
+    "readyState: "+htmlVideo.readyState+" ("+hlsReadyStateName(htmlVideo.readyState)+")",
+    "networkState: "+htmlVideo.networkState+" ("+hlsNetworkStateName(htmlVideo.networkState)+")",
+    "paused: "+htmlVideo.paused,
+    "ended: "+htmlVideo.ended,
+    "currentTime: "+(Number(htmlVideo.currentTime)||0).toFixed(3),
+    "duration: "+(Number.isFinite(Number(htmlVideo.duration))?Number(htmlVideo.duration).toFixed(3):String(htmlVideo.duration)),
+    "video size: "+htmlVideo.videoWidth+"x"+htmlVideo.videoHeight,
+    "buffered: "+hlsTimeRanges(htmlVideo.buffered),
+    "seekable: "+hlsTimeRanges(htmlVideo.seekable),
+    "",
+    "hls.js: "+hlsState,
+    "currentLevel: "+hlsLevel,
+    "levels: "+levels,
+    "media live: "+String(currentMediaIsLive),
+    "loginSyncPending: "+loginSyncPending,
+    "initialSourceSyncDone: "+initialSourceSyncDone,
+    "locallyPaused: "+locallyPaused,
+    "",
+    "UA: "+navigator.userAgent
+  ];
+  hlsDiagnostics.textContent=lines.join("\n");
+}
+
+function setHlsDiagnosticEvent(name,detail=""){
+  hlsDiagnosticLastEvent=String(name||"none")+(detail?" | "+String(detail):"");
+  renderHlsDiagnostics();
+}
+
+function setHlsDiagnosticError(data){
+  if(!data){
+    hlsDiagnosticLastError="unknown";
+  }else{
+    const parts=[
+      data.type||"",
+      data.details||"",
+      data.reason||"",
+      data.response&&data.response.code ? "HTTP "+data.response.code : "",
+      data.fatal===true ? "fatal" : "nonfatal"
+    ].filter(Boolean);
+    hlsDiagnosticLastError=parts.join(" | ")||"unknown";
+  }
+  renderHlsDiagnostics();
+}
+
+sourceBadge.addEventListener("click",()=>{
+  const type=normalizedType(state&&state.sourceType,state&&state.sourceUrl);
+  if(type!=="hls")return;
+  hlsDiagnosticVisible=!hlsDiagnosticVisible;
+  hlsDiagnostics.style.display=hlsDiagnosticVisible?"block":"none";
+  renderHlsDiagnostics();
+});
+
+["loadstart","loadedmetadata","loadeddata","canplay","canplaythrough","play","playing","waiting","stalled","suspend","progress","seeking","seeked","pause","error","emptied"].forEach(name=>{
+  htmlVideo.addEventListener(name,()=>{
+    if(normalizedType(state&&state.sourceType,state&&state.sourceUrl)!=="hls")return;
+    let detail="";
+    if(name==="error" && htmlVideo.error){
+      detail="mediaError="+htmlVideo.error.code+" "+(htmlVideo.error.message||"");
+      hlsDiagnosticLastError=detail;
+    }
+    setHlsDiagnosticEvent("video:"+name,detail);
+  });
+});
+
+hlsDiagnosticTimer=setInterval(renderHlsDiagnostics,500);
+
 function setSourceBadge(type){
   const labels={nfhs:"BROWSER CAPTURE",hls:"HLS / HUDL",youtube:"YOUTUBE",mp4:"MP4"};
   sourceBadge.textContent=labels[type]||"OFF";
 
   const normalized=String(type||"").toLowerCase();
+  sourceBadge.classList.toggle("hlsDiagnosticAvailable",normalized==="hls");
+  if(normalized!=="hls" && hlsDiagnostics){
+    hlsDiagnosticVisible=false;
+    hlsDiagnostics.style.display="none";
+  }
   const noFeed=!normalized || normalized==="off";
   const webRtcShared=normalized==="youtube";
 
@@ -1553,213 +1711,110 @@ async function buildHls(s,generation){
   const url=String(s.sourceUrl||"").trim();
   if(!url)throw new Error("No HLS URL.");
 
-  /*
-  HLS STARTUP HARDENING
-
-  Mobile Apple/WebKit browsers have their own native HLS pipeline. Prefer it
-  whenever the browser explicitly advertises native HLS support instead of
-  forcing the stream through MediaSource/hls.js.
-
-  For either path, a loaded manifest/quality list is NOT considered successful
-  playback. We require the media clock to actually advance. If it does not,
-  retry the HLS attachment/load up to two times before showing a real failure
-  message instead of leaving the viewer on a silent black frame.
-  */
-  const nativeHls=!!htmlVideo.canPlayType("application/vnd.apple.mpegurl");
-  const MAX_HLS_STARTUP_RETRIES=2;
-  const HLS_STARTUP_CONFIRM_MS=4500;
-  let startupAttempt=0;
-  let startupConfirmed=false;
-  let startupWatchToken=0;
-
-  function playbackClockIsMoving(sampleTime){
-    return (
-      generation===sourceGeneration &&
-      htmlVideo.readyState>=2 &&
-      !htmlVideo.paused &&
-      Number.isFinite(Number(htmlVideo.currentTime)) &&
-      Number(htmlVideo.currentTime)>Number(sampleTime)+0.08
-    );
-  }
-
-  function confirmHlsPlayback(){
-    if(generation!==sourceGeneration)return;
-    startupConfirmed=true;
-    startupWatchToken++;
-    setPlayPauseIcon(false);
-    playPause.title="Pause";
-    if(!processingFeed && !loginSyncPending)setCenter("",false);
-  }
-
-  async function tryStartPlayback(){
-    if(generation!==sourceGeneration||locallyPaused||staffMediaEnded)return;
-    try{
-      await htmlVideo.play();
-    }catch(err){
-      console.warn("HLS play() did not start:",err);
-    }
-  }
-
-  function armStartupWatch(retryFn){
-    const token=++startupWatchToken;
-    const sampleTime=Number(htmlVideo.currentTime)||0;
-
-    // Give the decoder enough time to produce real playback, not just metadata.
-    setTimeout(async()=>{
-      if(token!==startupWatchToken || startupConfirmed || generation!==sourceGeneration)return;
-      if(locallyPaused || staffMediaEnded)return;
-
-      if(playbackClockIsMoving(sampleTime)){
-        confirmHlsPlayback();
-        return;
-      }
-
-      if(startupAttempt<MAX_HLS_STARTUP_RETRIES){
-        startupAttempt++;
-        setCenter("RETRYING VIDEO FEED…",true);
-        await retryFn();
-        return;
-      }
-
-      processingFeed=false;
-      if(loginProcessingVeil)loginProcessingVeil.style.display="none";
-      setPlayPauseIcon(true);
-      playPause.title="Play / retry video feed";
-      setCenter("VIDEO FEED FAILED TO LOAD — PRESS SYNC TO RETRY",true);
-    },HLS_STARTUP_CONFIRM_MS);
-  }
-
-  // Actual time progression is the authoritative startup confirmation.
-  const onPlaying=()=>{
-    if(generation!==sourceGeneration)return;
-    const sample=Number(htmlVideo.currentTime)||0;
-    setTimeout(()=>{
-      if(generation!==sourceGeneration||startupConfirmed)return;
-      if(playbackClockIsMoving(sample))confirmHlsPlayback();
-    },350);
-  };
-  htmlVideo.addEventListener("playing",onPlaying);
-
-  if(nativeHls){
-    const loadNative=async()=>{
-      if(generation!==sourceGeneration)return;
-
-      try{htmlVideo.pause()}catch(_){}
-      htmlVideo.removeAttribute("src");
-      try{htmlVideo.load()}catch(_){}
-
-      htmlVideo.src=url;
-      htmlVideo.load();
-
-      const onMeta=async()=>{
-        if(generation!==sourceGeneration)return;
-
-        if(productionDelayWaiting()){
-          showProductionDelayState();
-        }else if(!loginSyncPending && !initialSourceSyncDone && !locallyPaused && productionDelayReady()){
-          initialSourceSyncDone=true;
-          // Keep the existing OBS-authoritative synchronization math unchanged.
-          playAndSyncProduction("initial-hls-sync").catch(showError);
-        }else if(!locallyPaused){
-          await tryStartPlayback();
-        }
-
-        armStartupWatch(loadNative);
-      };
-
-      htmlVideo.addEventListener("loadedmetadata",onMeta,{once:true});
-
-      // Some native HLS implementations reach canplay before loadedmetadata
-      // callbacks have successfully started playback. This is harmlessly idempotent.
-      htmlVideo.addEventListener("canplay",()=>{
-        if(generation===sourceGeneration && !locallyPaused)tryStartPlayback();
-      },{once:true});
-    };
-
-    await loadNative();
-    return;
-  }
+  hlsDiagnosticLastEvent="buildHls:start";
+  hlsDiagnosticLastError="none";
+  hlsDiagnosticPath="selecting…";
+  renderHlsDiagnostics();
 
   if(window.MediaSource){
+    hlsDiagnosticPath="hls.js / MediaSource";
+    setHlsDiagnosticEvent("path-selected","hls.js / MediaSource");
     await ensureHlsJs();
     if(generation!==sourceGeneration)return;
 
-    const loadWithHlsJs=async()=>{
+    hls=new Hls({
+      enableWorker:true,
+      lowLatencyMode:false,
+      liveSyncDuration:getEffectiveLatency(),
+      liveMaxLatencyDuration:getEffectiveLatency()+60,
+      maxLiveSyncPlaybackRate:1.0,
+      backBufferLength:60,
+      maxBufferLength:30,
+      maxMaxBufferLength:60,
+      maxBufferHole:0.5,
+      highBufferWatchdogPeriod:3,
+      startLevel:-1,
+      testBandwidth:true,
+      capLevelToPlayerSize:true
+    });
+
+    hls.on(Hls.Events.MEDIA_ATTACHED,()=>{
+      setHlsDiagnosticEvent("hls:MEDIA_ATTACHED");
+      hls.loadSource(url);
+    });
+    hls.on(Hls.Events.MANIFEST_PARSED,(event,data)=>{
       if(generation!==sourceGeneration)return;
-
-      if(hls){
-        try{hls.destroy()}catch(_){}
-        hls=null;
+      setHlsDiagnosticEvent("hls:MANIFEST_PARSED","levels="+((data&&data.levels&&data.levels.length)||0));
+      applyHlsQuality();
+      if(productionDelayWaiting()){
+        showProductionDelayState();
       }
-      try{htmlVideo.pause()}catch(_){}
-      htmlVideo.removeAttribute("src");
-      try{htmlVideo.load()}catch(_){}
-
-      hls=new Hls({
-        enableWorker:true,
-        lowLatencyMode:false,
-        liveSyncDuration:getEffectiveLatency(),
-        liveMaxLatencyDuration:getEffectiveLatency()+60,
-        maxLiveSyncPlaybackRate:1.0,
-        backBufferLength:60,
-        maxBufferLength:30,
-        maxMaxBufferLength:60,
-        maxBufferHole:0.5,
-        highBufferWatchdogPeriod:3,
-        startLevel:-1,
-        testBandwidth:true,
-        capLevelToPlayerSize:true
-      });
-
-      hls.on(Hls.Events.MEDIA_ATTACHED,()=>hls.loadSource(url));
-      hls.on(Hls.Events.MANIFEST_PARSED,()=>{
-        if(generation!==sourceGeneration)return;
-        applyHlsQuality();
-        if(productionDelayWaiting())showProductionDelayState();
-      });
-      hls.on(Hls.Events.LEVEL_UPDATED,(event,data)=>{
-        applyHlsQuality();
-        const d=data&&data.details;
-        if(d){
-          if(typeof d.live==="boolean")currentMediaIsLive=d.live;
-          else if(d.endList===true)currentMediaIsLive=false;
-        }
-      });
-      hls.on(Hls.Events.FRAG_BUFFERED,()=>{
-        if(generation!==sourceGeneration)return;
-        if(htmlVideo.readyState>=2){
-          if(!loginSyncPending && !initialSourceSyncDone && !locallyPaused && productionDelayReady()){
-            initialSourceSyncDone=true;
-            // Existing OBS-authoritative synchronization remains unchanged.
-            playAndSyncProduction("initial-hls-sync").catch(showError);
-          }else if(productionDelayWaiting()){
-            showProductionDelayState();
-          }else if(!locallyPaused){
-            tryStartPlayback();
-          }
-
-          if(!startupConfirmed)armStartupWatch(loadWithHlsJs);
-        }
-      });
-      hls.on(Hls.Events.ERROR,(event,data)=>{
-        if(!data||!data.fatal)return;
-        if(data.type===Hls.ErrorTypes.NETWORK_ERROR){
-          if(currentMediaIsLive===true && htmlVideo.currentTime>0){
-            showStaffEndedBlack(true);
-            return;
-          }
-          try{hls.startLoad()}catch(_){}
-        }else if(data.type===Hls.ErrorTypes.MEDIA_ERROR){
-          try{hls.recoverMediaError()}catch(_){}
+    });
+    hls.on(Hls.Events.LEVEL_UPDATED,(event,data)=>{
+      setHlsDiagnosticEvent("hls:LEVEL_UPDATED");
+      applyHlsQuality();
+      const d=data&&data.details;
+      if(d){
+        if(typeof d.live==="boolean")currentMediaIsLive=d.live;
+        else if(d.endList===true)currentMediaIsLive=false;
+      }
+    });
+    hls.on(Hls.Events.FRAG_BUFFERED,(event,data)=>{
+      if(generation!==sourceGeneration)return;
+      setHlsDiagnosticEvent("hls:FRAG_BUFFERED",
+        data&&data.frag ? "sn="+String(data.frag.sn)+" level="+String(data.frag.level) : "");
+      if(htmlVideo.readyState>=2){
+        if(!loginSyncPending && !initialSourceSyncDone && !locallyPaused && productionDelayReady()){
+          initialSourceSyncDone=true;
+          // OBS is authoritative. Once its protected delay gate is ready,
+          // ask for the exact media position it is rendering.
+          playAndSyncProduction("initial-hls-sync").catch(showError);
+        }else if(productionDelayWaiting()){
+          showProductionDelayState();
         }else{
-          setCenter("HLS feed could not be played in this browser.",true);
+          setCenter("",false);
         }
-      });
+      }
+    });
+    hls.on(Hls.Events.ERROR,(event,data)=>{
+      setHlsDiagnosticError(data);
+      setHlsDiagnosticEvent("hls:ERROR",
+        (data&&data.type?data.type:"")+" "+(data&&data.details?data.details:""));
+      if(!data||!data.fatal)return;
+      if(data.type===Hls.ErrorTypes.NETWORK_ERROR){
+        if(currentMediaIsLive===true && htmlVideo.currentTime>0){
+          showStaffEndedBlack(true);
+          return;
+        }
+        try{hls.startLoad()}catch(_){}
+      }else if(data.type===Hls.ErrorTypes.MEDIA_ERROR){
+        try{hls.recoverMediaError()}catch(_){}
+      }else{
+        setCenter("HLS feed could not be played in this browser.",true);
+      }
+    });
 
-      hls.attachMedia(htmlVideo);
-    };
+    hls.attachMedia(htmlVideo);
+    return;
+  }
 
-    await loadWithHlsJs();
+  if(htmlVideo.canPlayType("application/vnd.apple.mpegurl")){
+    hlsDiagnosticPath="native HLS";
+    setHlsDiagnosticEvent("path-selected","native HLS");
+    htmlVideo.src=url;
+    htmlVideo.addEventListener("loadedmetadata",()=>{
+      if(generation!==sourceGeneration)return;
+      if(!loginSyncPending && !initialSourceSyncDone && !locallyPaused && productionDelayReady()){
+        initialSourceSyncDone=true;
+        playAndSyncProduction("initial-hls-sync").catch(showError);
+      }else if(productionDelayWaiting()){
+        showProductionDelayState();
+      }else{
+        if(!locallyPaused&&state&&state.playing)htmlVideo.play().catch(()=>{});
+        setCenter("",false);
+      }
+    },{once:true});
+    htmlVideo.load();
     return;
   }
 
