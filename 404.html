@@ -110,22 +110,31 @@
 
             let currentFrameIsGitHubResource = false;
 
-            websiteFrame.addEventListener("load", () => {
+            function syncBrowserTitleFromGitHubHtml() {
                 if (!currentFrameIsGitHubResource) {
+                    document.title = "TJK152.COM";
                     return;
                 }
 
                 try {
+                    const childDocument =
+                        websiteFrame.contentDocument;
+
                     const childTitle =
-                        websiteFrame.contentDocument &&
-                        websiteFrame.contentDocument.title;
+                        childDocument &&
+                        String(childDocument.title || "").trim();
 
                     document.title =
-                        childTitle && childTitle.trim()
-                            ? childTitle.trim()
-                            : "TJK152.COM";
-                } catch (_) {}
-            });
+                        childTitle || "TJK152.COM";
+                } catch (_) {
+                    document.title = "TJK152.COM";
+                }
+            }
+
+            websiteFrame.addEventListener(
+                "load",
+                syncBrowserTitleFromGitHubHtml
+            );
 
 
             /* =====================================================
@@ -376,7 +385,7 @@
             const GITHUB_RESOURCES = Object.freeze({
                 "staff-viewer": "staff-resources/staff-viewer.html",
                 "youtube-player": "staff-resources/youtube-player.html",
-                "youtube-bridge": "staff-resources/youtube-bridge.html"
+                "youtube-bridge": "youtube-bridge.html"
             });
 
             function getCleanRouteName(path) {
