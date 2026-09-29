@@ -2553,12 +2553,16 @@ window.addEventListener("beforeunload",()=>{
   if(["auto","1080","720","540","480","360"].includes(savedQuality))quality.value=savedQuality;
   else quality.value="1080";
 
-  const savedVolume=Number(localStorage.getItem(VOLUME_STORAGE_KEY));
-  if(Number.isFinite(savedVolume)&&savedVolume>=0&&savedVolume<=100){
-    volume.value=String(savedVolume);
-  }
+  // Every page load starts Staff audio at full volume and unmuted.
+  // Do not restore a stale muted/0% state from an earlier tab or refresh.
+  volume.value="100";
+  staffMuted=false;
+  htmlVideo.muted=false;
+  rawVideo.muted=false;
+  try{localStorage.removeItem(VOLUME_STORAGE_KEY)}catch(_){}
 
   applyVolume();
+  setMuted(false);
   startAutoSyncTimer();
 
   // Login belongs to this tab session only: refresh keeps it; a new tab asks again.
