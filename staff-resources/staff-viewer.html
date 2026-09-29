@@ -595,7 +595,7 @@ async function runLoginBlackScreenSpamSync(){
 
     const started=Date.now();
     let lastYoutubeLoadRetry=0;
-    while(Date.now()-started<2500 && gen===sourceGeneration){
+    while(Date.now()-started<5000 && gen===sourceGeneration){
       if(type==="youtube"){
         if(youtubeStaffMediaActuallyReady())break;
         if(Date.now()-lastYoutubeLoadRetry>=700){
@@ -660,8 +660,26 @@ async function runLoginBlackScreenSpamSync(){
       loginConvergencePending=false;
     }
     else{
+      // Production login rule: a real media feed always starts playback first,
+      // then Staff asks OBS for the authoritative production position.
+      // A temporary muted bootstrap gives mobile browsers the best chance to
+      // honor autoplay without changing the staff member's saved mute choice.
+      const wasMuted=htmlVideo.muted;
+      locallyPaused=false;
+      setPlayPauseIcon(false);
+      playPause.title="Pause";
+      try{
+        htmlVideo.muted=true;
+        await htmlVideo.play();
+      }catch(_){
+        // If the browser still blocks autoplay, synchronization below gets one
+        // more normal play attempt after applying the OBS position.
+      }
       await new Promise(r=>setTimeout(r,220));
       await deterministicProductionSync("login",{processing:true});
+      if(gen!==sourceGeneration)return;
+      htmlVideo.muted=wasMuted;
+      applyVolume();
     }
     if(gen!==sourceGeneration)return;
 
@@ -2063,6 +2081,11 @@ async function buildSource(s){
       await buildMp4(s,generation);
     }
 
+    // A fresh Staff login must not merely load the media element and wait.
+    // Autoplay the active feed, then synchronize it to OBS before revealing it.
+    if(loginSyncPending && generation===sourceGeneration){
+      runLoginBlackScreenSpamSync().catch(showError);
+    }
 
   }catch(err){
     showError(err);
