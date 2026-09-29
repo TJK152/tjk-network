@@ -499,6 +499,14 @@ function beginProcessingFeed(){
   const generationAtStart=sourceGeneration;
   setTimeout(()=>{
     if(processingFeed && generationAtStart===sourceGeneration){
+      // iPhone HLS login is intentionally waiting for a REAL user gesture.
+      // Do not let the generic 3.5s processing safety valve tear down the exact
+      // processing window in which the user's manual SYNC has proven reliable.
+      const t=normalizedType(state&&state.sourceType,state&&state.sourceUrl);
+      if(IS_IPHONE_WEBKIT && t==="hls" && (loginSyncPending || hlsTapToStartVisible)){
+        hlsDiagCommand("iPhone processing hold","3.5s safety valve suppressed while waiting for TAP TO START");
+        return;
+      }
       processingFeed=false;
       setCenter("",false);
     }
@@ -2792,10 +2800,23 @@ async function connectToDevice(){
   window.__tjkLoginVeilArm=loginVeilArm;
   setTimeout(()=>{
     if(window.__tjkLoginVeilArm!==loginVeilArm || !loginSyncPending)return;
+    const t=normalizedType(state&&state.sourceType,state&&state.sourceUrl);
+
+    // iPhone HLS may legitimately still be waiting for TAP TO START at 4.5s.
+    // Previously this generic login timeout silently destroyed processingFeed,
+    // which explains why the same tap/manual-sync sequence worked only when it
+    // happened early enough. Keep the login transaction alive until the user
+    // actually performs the required gesture.
+    if(IS_IPHONE_WEBKIT && t==="hls" && hlsTapToStartVisible){
+      hlsDiagCommand("iPhone login hold","4.5s login timeout suppressed while waiting for TAP TO START");
+      processingFeed=true;
+      setCenter("PROCESSING VIDEO FEED",true);
+      return;
+    }
+
     loginSyncPending=false;
     processingFeed=false;
     if(loginProcessingVeil)loginProcessingVeil.style.display="none";
-    const t=normalizedType(state&&state.sourceType,state&&state.sourceUrl);
     if(!t || t==="off"){
       hideAllMedia();
       setSourceBadge("");
