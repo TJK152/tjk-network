@@ -251,6 +251,30 @@ body.fullscreen-idle #topBar{opacity:0;pointer-events:none;}
   user-select:none;
 }
 
+#hlsTapToStart{
+  position:absolute;
+  inset:0;
+  z-index:30;
+  display:none;
+  align-items:center;
+  justify-content:center;
+  background:rgba(0,0,0,.72);
+  cursor:pointer;
+  pointer-events:auto;
+}
+#hlsTapToStart button{
+  min-width:min(420px,calc(100vw - 40px));
+  min-height:70px;
+  padding:14px 24px;
+  border:5px solid var(--border);
+  border-radius:14px;
+  background:#fff;
+  color:var(--buttonText);
+  font-size:22px;
+  font-weight:bold;
+  cursor:pointer;
+}
+
 </style>
 </head>
 <body>
@@ -265,6 +289,7 @@ body.fullscreen-idle #topBar{opacity:0;pointer-events:none;}
   <div id="connectionStatus">DISCONNECTED</div>
   <div id="sourceBadge">OFF</div>
   <div id="hlsDiagnostics" aria-live="polite"></div>
+  <div id="hlsTapToStart"><button id="hlsTapToStartButton" type="button">▶ TAP TO START VIDEO</button></div>
 </div>
 
 <div id="controls">
@@ -322,6 +347,8 @@ const centerStatus=document.getElementById("centerStatus");
 const connectionStatus=document.getElementById("connectionStatus");
 const sourceBadge=document.getElementById("sourceBadge");
 const hlsDiagnostics=document.getElementById("hlsDiagnostics");
+const hlsTapToStart=document.getElementById("hlsTapToStart");
+const hlsTapToStartButton=document.getElementById("hlsTapToStartButton");
 const deviceModal=document.getElementById("deviceModal");
 const deviceInput=document.getElementById("deviceInput");
 const connectButton=document.getElementById("connectButton");
@@ -919,6 +946,7 @@ function setCenter(msg,visible=true){
 }
 
 function showStaffEndedBlack(isLive){
+  hideHlsTapToStart();
   staffMediaEnded=true;
   processingFeed=false;
   loginSyncPending=false;
@@ -968,6 +996,33 @@ function hlsDiagSeek(origin,target){
   hlsDiagnosticLastSeek=String(origin||"unknown")+" -> "+(Number.isFinite(Number(target))?Number(target).toFixed(3):String(target));
   renderHlsDiagnostics();
 }
+let hlsTapToStartVisible=false;
+function showHlsTapToStart(){
+  if(normalizedType(state&&state.sourceType,state&&state.sourceUrl)!=="hls")return;
+  hlsTapToStartVisible=true;
+  if(hlsTapToStart)hlsTapToStart.style.display="flex";
+  locallyPaused=true;
+  setPlayPauseIcon(true);
+}
+function hideHlsTapToStart(){
+  hlsTapToStartVisible=false;
+  if(hlsTapToStart)hlsTapToStart.style.display="none";
+}
+async function startHlsFromFreshUserGesture(){
+  if(!hlsTapToStartVisible)return;
+  // IMPORTANT: play() is the first asynchronous media action in this tap handler.
+  // The production seek already happened, so no additional sync/seek is performed here.
+  const started=await hlsDiagPlay("TAP TO START user gesture");
+  if(!started)return;
+  hideHlsTapToStart();
+  locallyPaused=false;
+  setPlayPauseIcon(false);
+  setCenter("",false);
+  applyVolume();
+}
+if(hlsTapToStartButton)hlsTapToStartButton.addEventListener("click",startHlsFromFreshUserGesture);
+if(hlsTapToStart)hlsTapToStart.addEventListener("click",e=>{if(e.target===hlsTapToStart)startHlsFromFreshUserGesture()});
+
 async function hlsDiagPlay(origin){
   hlsDiagnosticCommandDepth++;
   hlsDiagCommand("play()",origin);
@@ -977,6 +1032,9 @@ async function hlsDiagPlay(origin){
     return true;
   }catch(err){
     hlsDiagnosticLastPlayResult="REJECTED | "+origin+" | "+(err&&err.name?err.name+": ":"")+(err&&err.message?err.message:String(err));
+    if(err&&err.name==="NotAllowedError" && normalizedType(state&&state.sourceType,state&&state.sourceUrl)==="hls"){
+      showHlsTapToStart();
+    }
     return false;
   }finally{
     hlsDiagnosticCommandDepth=Math.max(0,hlsDiagnosticCommandDepth-1);
@@ -1179,6 +1237,7 @@ function closeRawPeer(){
 }
 
 function destroySource(){
+  hideHlsTapToStart();
   sourceGeneration++;
   loginConvergencePending=false;
   staffMediaEnded=false;
@@ -2628,6 +2687,7 @@ rawVideo.addEventListener("pause",()=>{
 });
 htmlVideo.addEventListener("play",()=>{
   const t=normalizedType(state&&state.sourceType,state&&state.sourceUrl);
+  if(t==="hls"){hideHlsTapToStart();}
   if(t==="hls"||t==="mp4"){locallyPaused=false;setPlayPauseIcon(false);}
 });
 htmlVideo.addEventListener("pause",()=>{
