@@ -1010,15 +1010,40 @@ function hideHlsTapToStart(){
 }
 async function startHlsFromFreshUserGesture(){
   if(!hlsTapToStartVisible)return;
-  // IMPORTANT: play() is the first asynchronous media action in this tap handler.
-  // The production seek already happened, so no additional sync/seek is performed here.
+
+  // iPad/Safari recovery lifecycle:
+  // 1) Use the fresh tap ONLY to establish permitted playback immediately.
+  // 2) Once playback is genuinely running, request a brand-new OBS measurement.
+  // 3) Seek the already-playing HLS element to that fresh target.
+  // If WebKit pauses because of the seek, the overlay is shown again so the next
+  // tap once again starts playback BEFORE taking another fresh OBS measurement.
+  const gen=sourceGeneration;
   const started=await hlsDiagPlay("TAP TO START user gesture");
   if(!started)return;
+  if(gen!==sourceGeneration)return;
+
   hideHlsTapToStart();
   locallyPaused=false;
   setPlayPauseIcon(false);
   setCenter("",false);
   applyVolume();
+
+  // Give WebKit one event turn to enter its real playing state, then measure OBS.
+  await new Promise(r=>setTimeout(r,80));
+  if(gen!==sourceGeneration||htmlVideo.paused){
+    if(htmlVideo.paused)showHlsTapToStart();
+    return;
+  }
+
+  await deterministicProductionSync("post-user-gesture-fresh-sync",{processing:true});
+  if(gen!==sourceGeneration)return;
+
+  // A large MediaSource seek can make older iPadOS pause without a TJK pause.
+  // Never issue an unprivileged recovery play here; ask for one fresh tap instead.
+  if(htmlVideo.paused && !staffMediaEnded){
+    hlsDiagCommand("tap required","post-user-gesture sync paused media");
+    showHlsTapToStart();
+  }
 }
 if(hlsTapToStartButton)hlsTapToStartButton.addEventListener("click",startHlsFromFreshUserGesture);
 if(hlsTapToStart)hlsTapToStart.addEventListener("click",e=>{if(e.target===hlsTapToStart)startHlsFromFreshUserGesture()});
@@ -1890,6 +1915,14 @@ async function runDeterministicProductionSync(reason,options={}){
   }
 
   if(processingFeed)await finishProcessingFeed(); else if(processing)setCenter("",false);
+
+  // Older iPadOS can silently pause HLS after a large MediaSource seek even when
+  // the source is healthy and buffered. Surface the user-gesture recovery instead
+  // of leaving Staff on a frozen frame with no explanation.
+  if(type==="hls" && !staffMediaEnded && htmlVideo.paused){
+    hlsDiagCommand("tap required","sync completed with HLS paused");
+    showHlsTapToStart();
+  }
 }
 
 async function deterministicProductionSync(reason="staff",options={}){
@@ -2724,6 +2757,20 @@ playPause.onclick=async()=>{
         locallyPaused=false;
         setPlayPauseIcon(false);
         setCenter("",false);
+
+        // PLAY is itself a fresh user gesture. Start playback first, then obtain
+        // a NEW OBS position and synchronize the already-playing HLS element.
+        // Do not use a position measured before the user started playback.
+        const gen=sourceGeneration;
+        await new Promise(r=>setTimeout(r,80));
+        if(gen!==sourceGeneration)return;
+        await deterministicProductionSync("play-button-post-gesture-fresh-sync",{processing:true});
+        if(gen!==sourceGeneration)return;
+        if(htmlVideo.paused && !staffMediaEnded){
+          hlsDiagCommand("tap required","play-button sync paused media");
+          showHlsTapToStart();
+        }
+        return;
       }
       playAndSyncProduction("resume").catch(showError);
     }
