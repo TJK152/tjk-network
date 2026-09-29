@@ -670,7 +670,8 @@ async function runLoginBlackScreenSpamSync(){
       playPause.title="Pause";
       try{
         htmlVideo.muted=true;
-        await htmlVideo.play();
+        if(type==="hls")await hlsDiagPlay("login autoplay bootstrap");
+        else await htmlVideo.play();
       }catch(_){
         // If the browser still blocks autoplay, synchronization below gets one
         // more normal play attempt after applying the OBS position.
@@ -885,6 +886,43 @@ let hlsDiagnosticLastEvent="none";
 let hlsDiagnosticLastError="none";
 let hlsDiagnosticPath="none";
 let hlsDiagnosticTimer=null;
+let hlsDiagnosticLastCommand="none";
+let hlsDiagnosticLastPlayResult="none";
+let hlsDiagnosticLastSeek="none";
+let hlsDiagnosticHlsJsSupport="not tested";
+let hlsDiagnosticPauseOrigin="none";
+let hlsDiagnosticCommandDepth=0;
+
+function hlsDiagCommand(name,detail=""){
+  hlsDiagnosticLastCommand=String(name||"none")+(detail?" | "+String(detail):"");
+  renderHlsDiagnostics();
+}
+function hlsDiagSeek(origin,target){
+  hlsDiagnosticLastSeek=String(origin||"unknown")+" -> "+(Number.isFinite(Number(target))?Number(target).toFixed(3):String(target));
+  renderHlsDiagnostics();
+}
+async function hlsDiagPlay(origin){
+  hlsDiagnosticCommandDepth++;
+  hlsDiagCommand("play()",origin);
+  try{
+    await htmlVideo.play();
+    hlsDiagnosticLastPlayResult="SUCCESS | "+origin;
+    return true;
+  }catch(err){
+    hlsDiagnosticLastPlayResult="REJECTED | "+origin+" | "+(err&&err.name?err.name+": ":"")+(err&&err.message?err.message:String(err));
+    return false;
+  }finally{
+    hlsDiagnosticCommandDepth=Math.max(0,hlsDiagnosticCommandDepth-1);
+    renderHlsDiagnostics();
+  }
+}
+function hlsDiagPause(origin){
+  hlsDiagnosticCommandDepth++;
+  hlsDiagCommand("pause()",origin);
+  try{htmlVideo.pause()}finally{
+    setTimeout(()=>{hlsDiagnosticCommandDepth=Math.max(0,hlsDiagnosticCommandDepth-1);renderHlsDiagnostics()},0);
+  }
+}
 
 function hlsTimeRanges(ranges){
   try{
@@ -928,8 +966,15 @@ function renderHlsDiagnostics(){
     "HLS DIAGNOSTICS — tap HLS / HUDL badge to close",
     "",
     "Path: "+hlsDiagnosticPath,
+    "MediaSource API: "+(window.MediaSource?"YES":"NO"),
+    "Native HLS canPlayType: "+(htmlVideo.canPlayType("application/vnd.apple.mpegurl")||"NO"),
+    "hls.js support: "+hlsDiagnosticHlsJsSupport,
     "Last event: "+hlsDiagnosticLastEvent,
     "Last error: "+hlsDiagnosticLastError,
+    "Last command: "+hlsDiagnosticLastCommand,
+    "Last play(): "+hlsDiagnosticLastPlayResult,
+    "Last seek: "+hlsDiagnosticLastSeek,
+    "Last pause origin: "+hlsDiagnosticPauseOrigin,
     "",
     "readyState: "+htmlVideo.readyState+" ("+hlsReadyStateName(htmlVideo.readyState)+")",
     "networkState: "+htmlVideo.networkState+" ("+hlsNetworkStateName(htmlVideo.networkState)+")",
@@ -990,6 +1035,9 @@ sourceBadge.addEventListener("click",()=>{
     if(name==="error" && htmlVideo.error){
       detail="mediaError="+htmlVideo.error.code+" "+(htmlVideo.error.message||"");
       hlsDiagnosticLastError=detail;
+    }
+    if(name==="pause"){
+      hlsDiagnosticPauseOrigin=hlsDiagnosticCommandDepth>0?"TJK command":"BROWSER / MEDIA ELEMENT (no TJK pause command active)";
     }
     setHlsDiagnosticEvent("video:"+name,detail);
   });
@@ -1631,9 +1679,15 @@ async function applyProductionTarget(response,type){
       const b=Number(htmlVideo.seekable.end(htmlVideo.seekable.length-1));
       if(Number.isFinite(a)&&Number.isFinite(b))pos=Math.max(a,Math.min(b,pos));
     }
+    if(type==="hls")hlsDiagSeek("applyProductionTarget",pos);
     htmlVideo.currentTime=pos;
-    if(response.productionPlaying)await htmlVideo.play().catch(()=>{});
-    else htmlVideo.pause();
+    if(response.productionPlaying){
+      if(type==="hls")await hlsDiagPlay("applyProductionTarget");
+      else await htmlVideo.play().catch(()=>{});
+    }else{
+      if(type==="hls")hlsDiagPause("applyProductionTarget: production paused");
+      else htmlVideo.pause();
+    }
     return true;
   }catch(_){return false}
 }
@@ -1731,6 +1785,11 @@ async function buildHls(s,generation){
 
   hlsDiagnosticLastEvent="buildHls:start";
   hlsDiagnosticLastError="none";
+  hlsDiagnosticLastCommand="none";
+  hlsDiagnosticLastPlayResult="none";
+  hlsDiagnosticLastSeek="none";
+  hlsDiagnosticPauseOrigin="none";
+  hlsDiagnosticHlsJsSupport="not tested";
   hlsDiagnosticPath="selecting…";
   renderHlsDiagnostics();
 
@@ -1738,6 +1797,8 @@ async function buildHls(s,generation){
     hlsDiagnosticPath="hls.js / MediaSource";
     setHlsDiagnosticEvent("path-selected","hls.js / MediaSource");
     await ensureHlsJs();
+    hlsDiagnosticHlsJsSupport=(window.Hls&&typeof Hls.isSupported==="function")?String(Hls.isSupported()):"Hls loaded; isSupported unavailable";
+    renderHlsDiagnostics();
     if(generation!==sourceGeneration)return;
 
     hls=new Hls({
@@ -1754,6 +1815,17 @@ async function buildHls(s,generation){
       startLevel:-1,
       testBandwidth:true,
       capLevelToPlayerSize:true
+    });
+
+    ["MANIFEST_LOADING","MANIFEST_LOADED","LEVEL_LOADING","LEVEL_LOADED","FRAG_LOADING","FRAG_LOADED","BUFFER_CREATED","BUFFER_APPENDED"].forEach(eventName=>{
+      const ev=Hls.Events[eventName];
+      if(!ev)return;
+      hls.on(ev,(event,data)=>{
+        let detail="";
+        if(data&&data.frag)detail="sn="+String(data.frag.sn)+" level="+String(data.frag.level);
+        else if(data&&data.level!==undefined)detail="level="+String(data.level);
+        setHlsDiagnosticEvent("hls:"+eventName,detail);
+      });
     });
 
     hls.on(Hls.Events.MEDIA_ATTACHED,()=>{
@@ -1819,6 +1891,15 @@ async function buildHls(s,generation){
   if(htmlVideo.canPlayType("application/vnd.apple.mpegurl")){
     hlsDiagnosticPath="native HLS";
     setHlsDiagnosticEvent("path-selected","native HLS");
+    // Diagnostic-only capability probe. Loading the hls.js library does NOT attach
+    // it to the media element and does not alter the native-HLS playback path.
+    ensureHlsJs().then(()=>{
+      hlsDiagnosticHlsJsSupport=(window.Hls&&typeof Hls.isSupported==="function")?String(Hls.isSupported()):"Hls loaded; isSupported unavailable";
+      renderHlsDiagnostics();
+    }).catch(err=>{
+      hlsDiagnosticHlsJsSupport="library load failed: "+(err&&err.message?err.message:String(err));
+      renderHlsDiagnostics();
+    });
     htmlVideo.src=url;
     htmlVideo.addEventListener("loadedmetadata",()=>{
       if(generation!==sourceGeneration)return;
@@ -1828,7 +1909,7 @@ async function buildHls(s,generation){
       }else if(productionDelayWaiting()){
         showProductionDelayState();
       }else{
-        if(!locallyPaused&&state&&state.playing)htmlVideo.play().catch(()=>{});
+        if(!locallyPaused&&state&&state.playing)hlsDiagPlay("native loadedmetadata autoplay").catch(()=>{});
         setCenter("",false);
       }
     },{once:true});
