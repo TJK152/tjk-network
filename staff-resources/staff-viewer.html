@@ -1682,8 +1682,15 @@ async function applyProductionTarget(response,type){
     if(type==="hls")hlsDiagSeek("applyProductionTarget",pos);
     htmlVideo.currentTime=pos;
     if(response.productionPlaying){
-      if(type==="hls")await hlsDiagPlay("applyProductionTarget");
-      else await htmlVideo.play().catch(()=>{});
+      // iPad/Safari: if the muted login bootstrap already established playback,
+      // preserve that autoplay session through the production seek. A redundant
+      // play() after the seek can be rejected with NotAllowedError and leave the
+      // otherwise healthy HLS element paused. Only request play when it is
+      // actually paused.
+      if(type==="hls"){
+        if(htmlVideo.paused)await hlsDiagPlay("applyProductionTarget: paused recovery");
+        else hlsDiagCommand("play preserved","applyProductionTarget: already playing");
+      }else await htmlVideo.play().catch(()=>{});
     }else{
       if(type==="hls")hlsDiagPause("applyProductionTarget: production paused");
       else htmlVideo.pause();
@@ -1745,7 +1752,12 @@ async function runDeterministicProductionSync(reason,options={}){
       try{
         if(type==="youtube"){
           if(verify.productionPlaying)youtubePlayer.playVideo(); else youtubePlayer.pauseVideo();
-        }else if(verify.productionPlaying){await htmlVideo.play().catch(()=>{})}else htmlVideo.pause();
+        }else if(verify.productionPlaying){
+          if(type==="hls"){
+            if(htmlVideo.paused)await hlsDiagPlay("verify production state: paused recovery");
+            else hlsDiagCommand("play preserved","verify production state: already playing");
+          }else await htmlVideo.play().catch(()=>{});
+        }else htmlVideo.pause();
       }catch(_){}
     }
     if(!verify.productionPlaying){processingFeed=false;setCenter("SYNCED TO OBS — PRODUCTION IS PAUSED",true);return;}
@@ -2571,6 +2583,21 @@ playPause.onclick=async()=>{
       rawVideo.play().catch(showError);
       setCenter("",false);
     }else{
+      if(type==="hls"){
+        // This call happens directly inside the user's tap/click, preserving the
+        // browser user-activation needed by iPadOS. Once playback is established,
+        // the normal production sync only seeks the already-playing element.
+        const started=await hlsDiagPlay("user gesture resume");
+        if(!started){
+          locallyPaused=true;
+          setPlayPauseIcon(true);
+          setCenter("PRESS PLAY TO RESUME THE VIDEO FEED",true);
+          return;
+        }
+        locallyPaused=false;
+        setPlayPauseIcon(false);
+        setCenter("",false);
+      }
       playAndSyncProduction("resume").catch(showError);
     }
   }else pauseLocal();
