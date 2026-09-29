@@ -1053,11 +1053,36 @@ async function startHlsFromFreshUserGesture(){
   setCenter("",false);
   applyVolume();
 
-  // Give WebKit one event turn to enter its real playing state, then measure OBS.
-  await new Promise(r=>setTimeout(r,80));
-  if(gen!==sourceGeneration||htmlVideo.paused){
-    if(htmlVideo.paused)showHlsTapToStart();
-    return;
+  // iPhone can resolve play() before the decoded picture/currentTime has actually
+  // started moving. Starting the production seek during that tiny window is what
+  // could intermittently leave the viewer black. On iPhone only, prove that the
+  // media is genuinely rendering/advancing before we begin the normal sync.
+  if(IS_IPHONE_WEBKIT){
+    const startedAt=Date.now();
+    const firstTime=Number(htmlVideo.currentTime)||0;
+    let advancing=false;
+    while(gen===sourceGeneration && Date.now()-startedAt<1800){
+      if(htmlVideo.paused)break;
+      const now=Number(htmlVideo.currentTime)||0;
+      if(htmlVideo.readyState>=2 && htmlVideo.videoWidth>0 && now>firstTime+0.04){
+        advancing=true;
+        break;
+      }
+      await new Promise(r=>setTimeout(r,50));
+    }
+    if(gen!==sourceGeneration)return;
+    if(!advancing || htmlVideo.paused){
+      hlsDiagCommand("tap required","iPhone play started but render/progress was not confirmed");
+      showHlsTapToStart();
+      return;
+    }
+  }else{
+    // Preserve the proven iPad timing exactly.
+    await new Promise(r=>setTimeout(r,80));
+    if(gen!==sourceGeneration||htmlVideo.paused){
+      if(htmlVideo.paused)showHlsTapToStart();
+      return;
+    }
   }
 
   await deterministicProductionSync("post-user-gesture-fresh-sync",{processing:true});
