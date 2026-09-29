@@ -660,27 +660,94 @@ async function runLoginBlackScreenSpamSync(){
       loginConvergencePending=false;
     }
     else{
-      // Production login rule: a real media feed always starts playback first,
-      // then Staff asks OBS for the authoritative production position.
-      // A temporary muted bootstrap gives mobile browsers the best chance to
-      // honor autoplay without changing the staff member's saved mute choice.
       const wasMuted=htmlVideo.muted;
       locallyPaused=false;
       setPlayPauseIcon(false);
       playPause.title="Pause";
-      try{
+
+      if(type==="hls"){
+        // iPad/WebKit login sequence: SEEK FIRST, PLAY SECOND.
+        // The previous sequence successfully established muted autoplay and then
+        // performed a large production seek. Older iPad WebKit paused the media
+        // element after that seek even though the buffer remained healthy.
+        //
+        // Ask OBS for its authoritative position while the element is still
+        // paused, seek there, let WebKit settle, and only then start muted
+        // autoplay. This avoids disturbing an already-playing MediaSource.
         htmlVideo.muted=true;
-        if(type==="hls")await hlsDiagPlay("login autoplay bootstrap");
-        else await htmlVideo.play();
-      }catch(_){
-        // If the browser still blocks autoplay, synchronization below gets one
-        // more normal play attempt after applying the OBS position.
+        hlsDiagCommand("login seek-first","requesting OBS target before autoplay");
+
+        let loginResponse=null;
+        try{loginResponse=await requestProductionSync()}catch(_){}
+        if(gen!==sourceGeneration)return;
+
+        if(loginResponse &&
+           Number(loginResponse.sourceRevision||0)===Number(state.sourceRevision||0) &&
+           !loginResponse.dvrUnavailable &&
+           !loginResponse.waitingForDelay &&
+           !loginResponse.delayWaiting &&
+           loginResponse.delayReady!==false){
+          let target=compensatedProductionTarget(loginResponse,"hls");
+          try{
+            if(htmlVideo.seekable&&htmlVideo.seekable.length){
+              const a=Number(htmlVideo.seekable.start(0));
+              const b=Number(htmlVideo.seekable.end(htmlVideo.seekable.length-1));
+              if(Number.isFinite(a)&&Number.isFinite(b))target=Math.max(a,Math.min(b,target));
+            }
+            hlsDiagSeek("login seek-before-play",target);
+            htmlVideo.currentTime=target;
+
+            // Give old WebKit a short opportunity to complete the MediaSource
+            // seek before asking it to begin playback. Do not issue another seek.
+            if(htmlVideo.seeking){
+              await new Promise(resolve=>{
+                let done=false;
+                const finish=()=>{
+                  if(done)return;
+                  done=true;
+                  htmlVideo.removeEventListener("seeked",finish);
+                  resolve();
+                };
+                htmlVideo.addEventListener("seeked",finish,{once:true});
+                setTimeout(finish,700);
+              });
+            }
+          }catch(_){}
+
+          if(gen!==sourceGeneration)return;
+          if(loginResponse.productionPlaying){
+            const started=await hlsDiagPlay("login seek-first muted autoplay");
+            if(started){
+              locallyPaused=false;
+              setPlayPauseIcon(false);
+              hlsDiagCommand("login seek-first","playback established after production seek");
+            }
+          }else{
+            hlsDiagPause("login seek-first: production paused");
+            locallyPaused=true;
+            setPlayPauseIcon(true);
+          }
+        }else{
+          // If OBS did not answer, retain the safe muted-autoplay fallback.
+          await hlsDiagPlay("login seek-first fallback autoplay");
+        }
+
+        if(gen!==sourceGeneration)return;
+        htmlVideo.muted=wasMuted;
+        applyVolume();
+        if(processingFeed)await finishProcessingFeed();
+      }else{
+        // MP4 keeps the established production behavior.
+        try{
+          htmlVideo.muted=true;
+          await htmlVideo.play();
+        }catch(_){}
+        await new Promise(r=>setTimeout(r,220));
+        await deterministicProductionSync("login",{processing:true});
+        if(gen!==sourceGeneration)return;
+        htmlVideo.muted=wasMuted;
+        applyVolume();
       }
-      await new Promise(r=>setTimeout(r,220));
-      await deterministicProductionSync("login",{processing:true});
-      if(gen!==sourceGeneration)return;
-      htmlVideo.muted=wasMuted;
-      applyVolume();
     }
     if(gen!==sourceGeneration)return;
 
