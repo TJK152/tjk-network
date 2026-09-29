@@ -704,9 +704,16 @@ async function runLoginBlackScreenSpamSync(){
         hlsDiagCommand("iPhone login","ready — waiting for TAP TO START user gesture");
         htmlVideo.muted=wasMuted;
         applyVolume();
-        processingFeed=false;
-        if(loginProcessingVeil)loginProcessingVeil.style.display="none";
-        setCenter("",false);
+
+        // IMPORTANT — preserve the iPhone login processing window until the
+        // user's TAP TO START gesture. Real-world testing showed that the exact
+        // manual SYNC routine succeeds reliably while this processing lifecycle
+        // is still active, but can fail after login processing is torn down.
+        // Do not clear processingFeed or hide the processing veil here.
+        // The tap overlay sits above the veil and the tap handler below runs the
+        // exact manual-sync transaction before allowing login processing to end.
+        processingFeed=true;
+        setCenter("PROCESSING VIDEO FEED",true);
         showHlsTapToStart();
       }else if(type==="hls"){
         // iPad/WebKit login sequence: SEEK FIRST, PLAY SECOND.
@@ -1035,14 +1042,53 @@ function hideHlsTapToStart(){
 }
 async function startHlsFromFreshUserGesture(){
   if(!hlsTapToStartVisible)return;
-
-  // iPad/Safari recovery lifecycle:
-  // 1) Use the fresh tap ONLY to establish permitted playback immediately.
-  // 2) Once playback is genuinely running, request a brand-new OBS measurement.
-  // 3) Seek the already-playing HLS element to that fresh target.
-  // If WebKit pauses because of the seek, the overlay is shown again so the next
-  // tap once again starts playback BEFORE taking another fresh OBS measurement.
   const gen=sourceGeneration;
+
+  if(IS_IPHONE_WEBKIT){
+    // iPhone-specific proven sequence:
+    // The user's tests show the normal SYNC button is reliable when pressed
+    // DURING the login PROCESSING VIDEO FEED window. Therefore do not pre-play,
+    // do not wait for currentTime advancement, and do not tear down processing.
+    // Use this fresh tap to launch the exact same manual-sync transaction while
+    // that login processing state is still alive.
+    hlsDiagCommand("iPhone TAP TO START","exact manual SYNC during login processing window");
+    locallyPaused=false;
+    setPlayPauseIcon(false);
+    hideHlsTapToStart();
+
+    try{
+      await runExactManualSyncFunction("iphone-tap-manual-sync",true);
+    }catch(err){
+      if(gen!==sourceGeneration)return;
+      hlsDiagCommand("tap required","iPhone manual-equivalent sync threw: "+(err&&err.message?err.message:String(err)));
+      showHlsTapToStart();
+      return;
+    }
+    if(gen!==sourceGeneration)return;
+
+    // Only declare login complete after the proven manual-sync path has left us
+    // with actual playable media. If Safari is still paused/black, keep the
+    // processing lifecycle available and let the user retry the same transaction.
+    const usable = !htmlVideo.paused && htmlVideo.readyState>=2 && htmlVideo.videoWidth>0;
+    if(!usable){
+      processingFeed=true;
+      if(loginProcessingVeil)loginProcessingVeil.style.display="block";
+      setCenter("PROCESSING VIDEO FEED",true);
+      hlsDiagCommand("tap required","iPhone manual-equivalent sync did not establish playable media");
+      showHlsTapToStart();
+      return;
+    }
+
+    processingFeed=false;
+    if(loginProcessingVeil)loginProcessingVeil.style.display="none";
+    setCenter("",false);
+    locallyPaused=false;
+    setPlayPauseIcon(false);
+    applyVolume();
+    return;
+  }
+
+  // Preserve the proven iPad lifecycle exactly.
   const started=await hlsDiagPlay("TAP TO START user gesture");
   if(!started)return;
   if(gen!==sourceGeneration)return;
@@ -1053,43 +1099,14 @@ async function startHlsFromFreshUserGesture(){
   setCenter("",false);
   applyVolume();
 
-  // iPhone can resolve play() before the decoded picture/currentTime has actually
-  // started moving. Starting the production seek during that tiny window is what
-  // could intermittently leave the viewer black. On iPhone only, prove that the
-  // media is genuinely rendering/advancing before we begin the normal sync.
-  if(IS_IPHONE_WEBKIT){
-    const startedAt=Date.now();
-    const firstTime=Number(htmlVideo.currentTime)||0;
-    let advancing=false;
-    while(gen===sourceGeneration && Date.now()-startedAt<1800){
-      if(htmlVideo.paused)break;
-      const now=Number(htmlVideo.currentTime)||0;
-      if(htmlVideo.readyState>=2 && htmlVideo.videoWidth>0 && now>firstTime+0.04){
-        advancing=true;
-        break;
-      }
-      await new Promise(r=>setTimeout(r,50));
-    }
-    if(gen!==sourceGeneration)return;
-    if(!advancing || htmlVideo.paused){
-      hlsDiagCommand("tap required","iPhone play started but render/progress was not confirmed");
-      showHlsTapToStart();
-      return;
-    }
-  }else{
-    // Preserve the proven iPad timing exactly.
-    await new Promise(r=>setTimeout(r,80));
-    if(gen!==sourceGeneration||htmlVideo.paused){
-      if(htmlVideo.paused)showHlsTapToStart();
-      return;
-    }
+  await new Promise(r=>setTimeout(r,80));
+  if(gen!==sourceGeneration||htmlVideo.paused){
+    if(htmlVideo.paused)showHlsTapToStart();
+    return;
   }
 
   await deterministicProductionSync("post-user-gesture-fresh-sync",{processing:true});
   if(gen!==sourceGeneration)return;
-
-  // A large MediaSource seek can make older iPadOS pause without a TJK pause.
-  // Never issue an unprivileged recovery play here; ask for one fresh tap instead.
   if(htmlVideo.paused && !staffMediaEnded){
     hlsDiagCommand("tap required","post-user-gesture sync paused media");
     showHlsTapToStart();
