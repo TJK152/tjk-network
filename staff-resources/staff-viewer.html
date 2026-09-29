@@ -280,7 +280,7 @@ body.fullscreen-idle #topBar{opacity:0;pointer-events:none;}
 <body>
 
 <div id="viewer">
-  <video id="htmlVideo" playsinline preload="auto"></video>
+  <video id="htmlVideo" playsinline preload="auto" disableRemotePlayback></video>
   <video id="rawVideo" playsinline autoplay class="hidden"></video>
   <div id="youtubeHost" class="hidden"></div>
   <div id="youtubeEndCover"></div>
@@ -1001,6 +1001,8 @@ const IS_IPAD_WEBKIT = (()=>{
   const platform=navigator.platform||"";
   return /iPad/i.test(ua) || (platform==="MacIntel" && Number(navigator.maxTouchPoints||0)>1);
 })();
+const IS_IPHONE_WEBKIT = /iPhone|iPod/i.test(navigator.userAgent||"");
+
 
 let hlsTapToStartVisible=false;
 function showHlsTapToStart(){
@@ -1124,6 +1126,8 @@ function renderHlsDiagnostics(){
     "",
     "Path: "+hlsDiagnosticPath,
     "MediaSource API: "+(window.MediaSource?"YES":"NO"),
+    "ManagedMediaSource API: "+(window.ManagedMediaSource?"YES":"NO"),
+    "disableRemotePlayback: "+String(!!htmlVideo.disableRemotePlayback),
     "Native HLS canPlayType: "+(htmlVideo.canPlayType("application/vnd.apple.mpegurl")||"NO"),
     "hls.js support: "+hlsDiagnosticHlsJsSupport,
     "Last event: "+hlsDiagnosticLastEvent,
@@ -2063,10 +2067,26 @@ async function buildHls(s,generation){
   hlsDiagnosticPath="selecting…";
   renderHlsDiagnostics();
 
-  if(window.MediaSource){
-    hlsDiagnosticPath="hls.js / MediaSource";
-    setHlsDiagnosticEvent("path-selected","hls.js / MediaSource");
-    await ensureHlsJs();
+  // iPhone Safari can expose an hls.js-supported ManagedMediaSource path even
+  // when the legacy window.MediaSource probe is false. Load hls.js first on
+  // iPhone and let Hls.isSupported() be authoritative. disableRemotePlayback
+  // on the video element allows WebKit ManagedMediaSource to activate.
+  let iphoneHlsJsSupported=false;
+  if(IS_IPHONE_WEBKIT){
+    try{
+      htmlVideo.disableRemotePlayback=true;
+      await ensureHlsJs();
+      iphoneHlsJsSupported=!!(window.Hls&&typeof Hls.isSupported==="function"&&Hls.isSupported());
+      hlsDiagnosticHlsJsSupport=String(iphoneHlsJsSupported);
+    }catch(err){
+      hlsDiagnosticHlsJsSupport="library load failed: "+(err&&err.message?err.message:String(err));
+    }
+  }
+
+  if(window.MediaSource || iphoneHlsJsSupported){
+    hlsDiagnosticPath=IS_IPHONE_WEBKIT && !window.MediaSource ? "hls.js / iPhone managed media" : "hls.js / MediaSource";
+    setHlsDiagnosticEvent("path-selected",hlsDiagnosticPath);
+    if(!window.Hls) await ensureHlsJs();
     hlsDiagnosticHlsJsSupport=(window.Hls&&typeof Hls.isSupported==="function")?String(Hls.isSupported()):"Hls loaded; isSupported unavailable";
     renderHlsDiagnostics();
     if(generation!==sourceGeneration)return;
