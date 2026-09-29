@@ -1816,6 +1816,13 @@ function compensatedProductionTarget(response,type){
       // No verification/repeated seeks are introduced.
       pos+=0.08;
     }
+    if(type==="hls" && IS_IPAD_WEBKIT){
+      // iPad/WebKit HLS consistently settles just under one second behind OBS
+      // even after the normal fresh-position convergence completes. Apply a
+      // small forward calibration ONLY to iPad HLS targets. Desktop HLS keeps
+      // the exact production target and is intentionally untouched.
+      pos+=0.50;
+    }
   }
   return pos;
 }
