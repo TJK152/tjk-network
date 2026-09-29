@@ -693,38 +693,21 @@ async function runLoginBlackScreenSpamSync(){
       playPause.title="Pause";
 
       if(type==="hls" && IS_IPHONE_WEBKIT){
-        // iPhone HLS login: reproduce the sequence that is already proven by
-        // pressing SYNC while PROCESSING VIDEO FEED is visible.  The important
-        // difference from iPad is that this ManagedMediaSource path can begin
-        // muted playback automatically; once playback exists, run the exact
-        // normal/manual production-sync transaction.
-        htmlVideo.muted=true;
-        hlsDiagCommand("iPhone login","establish muted playback before normal SYNC");
-
-        let started=false;
-        try{started=await hlsDiagPlay("iPhone login muted bootstrap")}catch(_){}
-        if(gen!==sourceGeneration)return;
-
-        // Give WebKit/hls.js a moment to advance off the first decoded frame.
-        if(started){
-          const playStart=Date.now();
-          const firstTime=Number(htmlVideo.currentTime)||0;
-          while(Date.now()-playStart<900 && gen===sourceGeneration){
-            if(!htmlVideo.paused && Number(htmlVideo.currentTime)>firstTime+0.03)break;
-            await new Promise(r=>setTimeout(r,50));
-          }
-        }
-        if(gen!==sourceGeneration)return;
-
-        // This is deliberately the SAME sync function used by the SYNC button.
-        // Do it while the login processing state is still active so login cannot
-        // time out to a black screen before the first authoritative sync.
-        await runExactManualSyncFunction("iphone-login-manual-equivalent",true);
-        if(gen!==sourceGeneration)return;
-
+        // iPhone Safari requires a genuine user activation to reliably start
+        // this Hudl/hls.js path. Programmatically imitating the SYNC click during
+        // login is not equivalent to the real button press and can leave the
+        // viewer on a dead black frame. Do not consume the ready source with an
+        // automatic play/sync attempt. Surface the same explicit recovery gesture
+        // used successfully on iPad, then let startHlsFromFreshUserGesture() start
+        // playback synchronously from that tap and immediately run a FRESH normal
+        // production sync. No iPad +500 ms compensation is applied to iPhone.
+        hlsDiagCommand("iPhone login","ready — waiting for TAP TO START user gesture");
         htmlVideo.muted=wasMuted;
         applyVolume();
-        if(processingFeed)await finishProcessingFeed();
+        processingFeed=false;
+        if(loginProcessingVeil)loginProcessingVeil.style.display="none";
+        setCenter("",false);
+        showHlsTapToStart();
       }else if(type==="hls"){
         // iPad/WebKit login sequence: SEEK FIRST, PLAY SECOND.
         // The previous sequence successfully established muted autoplay and then
@@ -1039,7 +1022,7 @@ const IS_IPHONE_WEBKIT = /iPhone|iPod/i.test(navigator.userAgent||"");
 
 let hlsTapToStartVisible=false;
 function showHlsTapToStart(){
-  if(!IS_IPAD_WEBKIT)return;
+  if(!(IS_IPAD_WEBKIT||IS_IPHONE_WEBKIT))return;
   if(normalizedType(state&&state.sourceType,state&&state.sourceUrl)!=="hls")return;
   hlsTapToStartVisible=true;
   if(hlsTapToStart)hlsTapToStart.style.display="flex";
@@ -2052,7 +2035,7 @@ async function runDeterministicProductionSync(reason,options={}){
   // Older iPadOS can silently pause HLS after a large MediaSource seek even when
   // the source is healthy and buffered. Surface the user-gesture recovery instead
   // of leaving Staff on a frozen frame with no explanation.
-  if(IS_IPAD_WEBKIT && type==="hls" && !staffMediaEnded && htmlVideo.paused){
+  if((IS_IPAD_WEBKIT||IS_IPHONE_WEBKIT) && type==="hls" && !staffMediaEnded && htmlVideo.paused){
     hlsDiagCommand("tap required","sync completed with HLS paused");
     showHlsTapToStart();
   }
