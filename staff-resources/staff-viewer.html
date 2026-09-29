@@ -692,7 +692,40 @@ async function runLoginBlackScreenSpamSync(){
       setPlayPauseIcon(false);
       playPause.title="Pause";
 
-      if(type==="hls"){
+      if(type==="hls" && IS_IPHONE_WEBKIT){
+        // iPhone HLS login: reproduce the sequence that is already proven by
+        // pressing SYNC while PROCESSING VIDEO FEED is visible.  The important
+        // difference from iPad is that this ManagedMediaSource path can begin
+        // muted playback automatically; once playback exists, run the exact
+        // normal/manual production-sync transaction.
+        htmlVideo.muted=true;
+        hlsDiagCommand("iPhone login","establish muted playback before normal SYNC");
+
+        let started=false;
+        try{started=await hlsDiagPlay("iPhone login muted bootstrap")}catch(_){}
+        if(gen!==sourceGeneration)return;
+
+        // Give WebKit/hls.js a moment to advance off the first decoded frame.
+        if(started){
+          const playStart=Date.now();
+          const firstTime=Number(htmlVideo.currentTime)||0;
+          while(Date.now()-playStart<900 && gen===sourceGeneration){
+            if(!htmlVideo.paused && Number(htmlVideo.currentTime)>firstTime+0.03)break;
+            await new Promise(r=>setTimeout(r,50));
+          }
+        }
+        if(gen!==sourceGeneration)return;
+
+        // This is deliberately the SAME sync function used by the SYNC button.
+        // Do it while the login processing state is still active so login cannot
+        // time out to a black screen before the first authoritative sync.
+        await runExactManualSyncFunction("iphone-login-manual-equivalent",true);
+        if(gen!==sourceGeneration)return;
+
+        htmlVideo.muted=wasMuted;
+        applyVolume();
+        if(processingFeed)await finishProcessingFeed();
+      }else if(type==="hls"){
         // iPad/WebKit login sequence: SEEK FIRST, PLAY SECOND.
         // The previous sequence successfully established muted autoplay and then
         // performed a large production seek. Older iPad WebKit paused the media
@@ -2785,6 +2818,32 @@ function toggleMute(){
 
 async function toggleFullscreen(){
   const target=document.getElementById("viewer")||document.documentElement;
+
+  // iPhone Safari does not provide reliable document/element fullscreen for
+  // arbitrary page containers.  For an active Staff video, use Safari's native
+  // video fullscreen API instead of opening a duplicate viewer tab.
+  if(IS_IPHONE_WEBKIT){
+    const type=normalizedType(state&&state.sourceType,state&&state.sourceUrl);
+    if(["hls","mp4","nfhs","youtube"].includes(type)){
+      const video=(type==="nfhs"||type==="youtube")?rawVideo:htmlVideo;
+      try{
+        if(video && typeof video.webkitEnterFullscreen==="function"){
+          video.webkitEnterFullscreen();
+          return;
+        }
+        if(video && typeof video.webkitEnterFullScreen==="function"){
+          video.webkitEnterFullScreen();
+          return;
+        }
+      }catch(err){
+        console.warn("iPhone native video fullscreen failed:",err);
+      }
+      setCenter("FULLSCREEN IS NOT AVAILABLE IN THIS iPHONE BROWSER",true);
+      setTimeout(()=>{if(state)setCenter("",false)},1200);
+      return;
+    }
+  }
+
   try{
     const active=document.fullscreenElement||document.webkitFullscreenElement;
     if(active){
