@@ -996,8 +996,15 @@ function hlsDiagSeek(origin,target){
   hlsDiagnosticLastSeek=String(origin||"unknown")+" -> "+(Number.isFinite(Number(target))?Number(target).toFixed(3):String(target));
   renderHlsDiagnostics();
 }
+const IS_IPAD_WEBKIT = (()=>{
+  const ua=navigator.userAgent||"";
+  const platform=navigator.platform||"";
+  return /iPad/i.test(ua) || (platform==="MacIntel" && Number(navigator.maxTouchPoints||0)>1);
+})();
+
 let hlsTapToStartVisible=false;
 function showHlsTapToStart(){
+  if(!IS_IPAD_WEBKIT)return;
   if(normalizedType(state&&state.sourceType,state&&state.sourceUrl)!=="hls")return;
   hlsTapToStartVisible=true;
   if(hlsTapToStart)hlsTapToStart.style.display="flex";
@@ -1057,7 +1064,7 @@ async function hlsDiagPlay(origin){
     return true;
   }catch(err){
     hlsDiagnosticLastPlayResult="REJECTED | "+origin+" | "+(err&&err.name?err.name+": ":"")+(err&&err.message?err.message:String(err));
-    if(err&&err.name==="NotAllowedError" && normalizedType(state&&state.sourceType,state&&state.sourceUrl)==="hls"){
+    if(IS_IPAD_WEBKIT && err&&err.name==="NotAllowedError" && normalizedType(state&&state.sourceType,state&&state.sourceUrl)==="hls"){
       showHlsTapToStart();
     }
     return false;
@@ -1850,6 +1857,18 @@ async function applyProductionTarget(response,type){
   }catch(_){return false}
 }
 
+async function waitForHlsSeekSettle(gen,timeoutMs=900){
+  if(gen!==sourceGeneration)return false;
+  if(!htmlVideo.seeking)return true;
+  return new Promise(resolve=>{
+    let done=false;
+    const finish=v=>{if(done)return;done=true;clearTimeout(timer);htmlVideo.removeEventListener("seeked",onSeeked);resolve(v)};
+    const onSeeked=()=>finish(gen===sourceGeneration);
+    const timer=setTimeout(()=>finish(gen===sourceGeneration),timeoutMs);
+    htmlVideo.addEventListener("seeked",onSeeked,{once:true});
+  });
+}
+
 async function runHlsChaseSync(reason,options={}){
   if(staffMediaEnded||!deviceId||!state)return;
   const processing=options.processing!==false;
@@ -1860,11 +1879,10 @@ async function runHlsChaseSync(reason,options={}){
   setPlayPauseIcon(false);
   playPause.title="Pause";
 
-  // HLS on older iPadOS is handled differently from desktop/MP4:
-  // never use an asynchronous play() call as part of synchronization.
-  // A real user gesture establishes playback. Sync only chases OBS with
-  // fresh measurements and seeks the already-playing media element.
-  for(let pass=0;pass<3;pass++){
+  // iPad-only convergence. Desktop HLS never enters this routine.
+  // Each correction waits for WebKit to FINISH the seek before asking OBS for
+  // another authoritative position, so a slow seek cannot make the next target stale.
+  for(let pass=0;pass<4;pass++){
     const response=await requestProductionSync();
     if(gen!==sourceGeneration)return;
     if(!response||Number(response.sourceRevision||0)!==Number(state.sourceRevision||0)){
@@ -1877,9 +1895,8 @@ async function runHlsChaseSync(reason,options={}){
       processingFeed=false;
       return;
     }
-
     if(!response.productionPlaying){
-      hlsDiagPause("HLS chase: production paused");
+      hlsDiagPause("iPad sync: production paused");
       processingFeed=false;
       setCenter("SYNCED TO OBS — PRODUCTION IS PAUSED",true);
       return;
@@ -1896,24 +1913,23 @@ async function runHlsChaseSync(reason,options={}){
 
     const local=Number(htmlVideo.currentTime);
     const delta=Number.isFinite(local)?target-local:Infinity;
-    hlsDiagCommand("HLS chase pass "+(pass+1),"delta="+(Number.isFinite(delta)?delta.toFixed(3):"n/a"));
+    hlsDiagCommand("iPad sync pass "+(pass+1),"delta="+(Number.isFinite(delta)?delta.toFixed(3):"n/a"));
 
-    // First pass always establishes the fresh production target. Later passes
-    // only correct meaningful drift. No play() is issued after the seek.
-    if(pass===0 || !Number.isFinite(local) || Math.abs(delta)>0.10){
-      hlsDiagSeek("HLS chase pass "+(pass+1),target);
-      try{htmlVideo.currentTime=target}catch(_){}
-    }
+    // Once we're within 90 ms on a fresh OBS measurement, stop touching playback.
+    if(pass>0 && Number.isFinite(delta) && Math.abs(delta)<=0.09)break;
 
-    // Give WebKit just enough time to apply the seek, then measure OBS again.
-    await new Promise(r=>setTimeout(r,140));
+    hlsDiagSeek("iPad sync pass "+(pass+1),target);
+    try{htmlVideo.currentTime=target}catch(_){}
+    await waitForHlsSeekSettle(gen,900);
     if(gen!==sourceGeneration)return;
 
-    // If WebKit paused because of the seek, stop immediately. The next action
-    // must be a real user gesture; do not burn time on rejected autoplay calls.
+    // Let currentTime advance after seeked before judging the next fresh sample.
+    await new Promise(r=>setTimeout(r,90));
+    if(gen!==sourceGeneration)return;
+
     if(htmlVideo.paused){
       processingFeed=false;
-      hlsDiagCommand("tap required","HLS chase paused after pass "+(pass+1));
+      hlsDiagCommand("tap required","iPad sync paused after pass "+(pass+1));
       showHlsTapToStart();
       return;
     }
@@ -1992,7 +2008,7 @@ async function runDeterministicProductionSync(reason,options={}){
   // Older iPadOS can silently pause HLS after a large MediaSource seek even when
   // the source is healthy and buffered. Surface the user-gesture recovery instead
   // of leaving Staff on a frozen frame with no explanation.
-  if(type==="hls" && !staffMediaEnded && htmlVideo.paused){
+  if(IS_IPAD_WEBKIT && type==="hls" && !staffMediaEnded && htmlVideo.paused){
     hlsDiagCommand("tap required","sync completed with HLS paused");
     showHlsTapToStart();
   }
@@ -2000,7 +2016,7 @@ async function runDeterministicProductionSync(reason,options={}){
 
 async function deterministicProductionSync(reason="staff",options={}){
   const syncType=normalizedType(state&&state.sourceType,state&&state.sourceUrl);
-  if(syncType==="hls")return runHlsChaseSync(reason,options);
+  if(syncType==="hls" && IS_IPAD_WEBKIT)return runHlsChaseSync(reason,options);
 
   // Never allow login, admin, manual, and 60-second sync transactions to
   // overwrite one another's request IDs. One transaction owns the channel.
@@ -2842,7 +2858,7 @@ playPause.onclick=async()=>{
         if(gen!==sourceGeneration)return;
         await deterministicProductionSync("play-button-post-gesture-fresh-sync",{processing:true});
         if(gen!==sourceGeneration)return;
-        if(htmlVideo.paused && !staffMediaEnded){
+        if(IS_IPAD_WEBKIT && htmlVideo.paused && !staffMediaEnded){
           hlsDiagCommand("tap required","play-button sync paused media");
           showHlsTapToStart();
         }
