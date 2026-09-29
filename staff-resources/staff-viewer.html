@@ -254,7 +254,7 @@ body.fullscreen-idle #topBar{opacity:0;pointer-events:none;}
 #hlsTapToStart{
   position:absolute;
   inset:0;
-  z-index:30;
+  z-index:80;
   display:none;
   align-items:center;
   justify-content:center;
@@ -1850,6 +1850,79 @@ async function applyProductionTarget(response,type){
   }catch(_){return false}
 }
 
+async function runHlsChaseSync(reason,options={}){
+  if(staffMediaEnded||!deviceId||!state)return;
+  const processing=options.processing!==false;
+  const gen=sourceGeneration;
+
+  if(processing && !processingFeed)beginProcessingFeed();
+  locallyPaused=false;
+  setPlayPauseIcon(false);
+  playPause.title="Pause";
+
+  // HLS on older iPadOS is handled differently from desktop/MP4:
+  // never use an asynchronous play() call as part of synchronization.
+  // A real user gesture establishes playback. Sync only chases OBS with
+  // fresh measurements and seeks the already-playing media element.
+  for(let pass=0;pass<3;pass++){
+    const response=await requestProductionSync();
+    if(gen!==sourceGeneration)return;
+    if(!response||Number(response.sourceRevision||0)!==Number(state.sourceRevision||0)){
+      if(processing)setCenter("Could not get sync feedback from OBS. Press SYNC to retry.",true);
+      processingFeed=false;
+      return;
+    }
+    if(response.delayWaiting||response.delayReady===false){
+      setCenter(staffWaitingMessage(Number(response.delaySeconds)||getEffectiveLatency()),true);
+      processingFeed=false;
+      return;
+    }
+
+    if(!response.productionPlaying){
+      hlsDiagPause("HLS chase: production paused");
+      processingFeed=false;
+      setCenter("SYNCED TO OBS — PRODUCTION IS PAUSED",true);
+      return;
+    }
+
+    let target=compensatedProductionTarget(response,"hls");
+    try{
+      if(htmlVideo.seekable&&htmlVideo.seekable.length){
+        const a=Number(htmlVideo.seekable.start(0));
+        const b=Number(htmlVideo.seekable.end(htmlVideo.seekable.length-1));
+        if(Number.isFinite(a)&&Number.isFinite(b))target=Math.max(a,Math.min(b,target));
+      }
+    }catch(_){}
+
+    const local=Number(htmlVideo.currentTime);
+    const delta=Number.isFinite(local)?target-local:Infinity;
+    hlsDiagCommand("HLS chase pass "+(pass+1),"delta="+(Number.isFinite(delta)?delta.toFixed(3):"n/a"));
+
+    // First pass always establishes the fresh production target. Later passes
+    // only correct meaningful drift. No play() is issued after the seek.
+    if(pass===0 || !Number.isFinite(local) || Math.abs(delta)>0.10){
+      hlsDiagSeek("HLS chase pass "+(pass+1),target);
+      try{htmlVideo.currentTime=target}catch(_){}
+    }
+
+    // Give WebKit just enough time to apply the seek, then measure OBS again.
+    await new Promise(r=>setTimeout(r,140));
+    if(gen!==sourceGeneration)return;
+
+    // If WebKit paused because of the seek, stop immediately. The next action
+    // must be a real user gesture; do not burn time on rejected autoplay calls.
+    if(htmlVideo.paused){
+      processingFeed=false;
+      hlsDiagCommand("tap required","HLS chase paused after pass "+(pass+1));
+      showHlsTapToStart();
+      return;
+    }
+  }
+
+  if(processingFeed)await finishProcessingFeed();
+  else if(processing)setCenter("",false);
+}
+
 async function runDeterministicProductionSync(reason,options={}){
   if(staffMediaEnded||!deviceId||!state)return;
   const type=normalizedType(state.sourceType,state.sourceUrl);
@@ -1926,6 +1999,9 @@ async function runDeterministicProductionSync(reason,options={}){
 }
 
 async function deterministicProductionSync(reason="staff",options={}){
+  const syncType=normalizedType(state&&state.sourceType,state&&state.sourceUrl);
+  if(syncType==="hls")return runHlsChaseSync(reason,options);
+
   // Never allow login, admin, manual, and 60-second sync transactions to
   // overwrite one another's request IDs. One transaction owns the channel.
   if(deterministicSyncPromise){
