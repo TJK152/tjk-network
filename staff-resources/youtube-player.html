@@ -81,7 +81,77 @@ button:hover{background:#0093FF;color:#fff}
 </div>
 <script>
 "use strict";
-const FIREBASE_BASE="https://tjk-network-controls-default-rtdb.firebaseio.com";
+const FIREBASE_PRIMARY="https://tjk-network-controls-default-rtdb.firebaseio.com";
+const FIREBASE_BACKUP="https://tjk-network-controls-backup-default-rtdb.firebaseio.com";
+let FIREBASE_BASE=FIREBASE_PRIMARY;
+let tjkFirebaseSelectionPromise=null;
+let tjkFirebaseStreamHealthy=false;
+let tjkFirebaseFallbackTimer=null;
+const TJK_FIREBASE_FALLBACK_POLL_MS=500;
+
+function tjkFirebaseTranslateUrl(url,base){
+  const s=String(url||"");
+  if(s.startsWith(FIREBASE_PRIMARY))return base+s.slice(FIREBASE_PRIMARY.length);
+  if(s.startsWith(FIREBASE_BACKUP))return base+s.slice(FIREBASE_BACKUP.length);
+  return s;
+}
+async function tjkFirebaseFetch(url,options={}){
+  const activeUrl=tjkFirebaseTranslateUrl(url,FIREBASE_BASE);
+  try{
+    const r=await fetch(activeUrl,{...options,cache:"no-store"});
+    if(!r.ok){
+      const body=await r.text().catch(()=>"");
+      const e=new Error(`Firebase ${options.method||"GET"} ${r.status}${body?" — "+body.slice(0,180):""}`);
+      e.status=r.status;
+      throw e;
+    }
+    return r;
+  }catch(primaryError){
+    if(FIREBASE_BASE!==FIREBASE_PRIMARY)throw primaryError;
+    const backupUrl=tjkFirebaseTranslateUrl(url,FIREBASE_BACKUP);
+    const r=await fetch(backupUrl,{...options,cache:"no-store"});
+    if(!r.ok){
+      const body=await r.text().catch(()=>"");
+      const e=new Error(`Backup Firebase ${options.method||"GET"} ${r.status}${body?" — "+body.slice(0,180):""}`);
+      e.status=r.status;
+      throw e;
+    }
+    FIREBASE_BASE=FIREBASE_BACKUP;
+    tjkFirebaseStreamHealthy=false;
+    setTimeout(()=>{
+      try{
+        if(typeof openFirebaseStream==="function")openFirebaseStream();
+        else if(typeof openStream==="function")openStream();
+      }catch(_){}
+    },0);
+    return r;
+  }
+}
+async function tjkFirebaseProbe(base){
+  const r=await fetch(base+"/.json?shallow=true",{method:"GET",cache:"no-store"});
+  if(!r.ok)throw new Error(`Firebase probe ${r.status}`);
+  return true;
+}
+async function tjkSelectFirebaseServer(){
+  if(FIREBASE_BASE===FIREBASE_BACKUP)return FIREBASE_BASE;
+  if(tjkFirebaseSelectionPromise)return tjkFirebaseSelectionPromise;
+  tjkFirebaseSelectionPromise=(async()=>{
+    try{
+      await tjkFirebaseProbe(FIREBASE_PRIMARY);
+      FIREBASE_BASE=FIREBASE_PRIMARY;
+    }catch(_){
+      await tjkFirebaseProbe(FIREBASE_BACKUP);
+      FIREBASE_BASE=FIREBASE_BACKUP;
+    }
+    return FIREBASE_BASE;
+  })();
+  try{return await tjkFirebaseSelectionPromise}
+  finally{tjkFirebaseSelectionPromise=null}
+}
+async function fbGet(url){
+  const r=await tjkFirebaseFetch(url,{method:"GET"});
+  return r.json().catch(()=>null);
+}
 const DEVICE_KEY="tjk-youtube-sender-device-id-v1";
 const DEVICE_TAB_SESSION_KEY="tjk-youtube-sender-device-tab-session-v1";
 const VIDEO_WIDTH=1920,VIDEO_HEIGHT=1080,VIDEO_FPS=30,VIDEO_MAX_BITRATE=5500000;
@@ -223,8 +293,11 @@ function evaluateYoutubeEnded(){
     pendingEndedState=false;
   }
 }
-async function fbPut(url,v){const r=await fetch(url,{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(v),cache:"no-store"});if(!r.ok)throw new Error("Firebase PUT "+r.status);return r.json().catch(()=>null)}
-async function fbDelete(url){const r=await fetch(url,{method:"DELETE",cache:"no-store"});if(!r.ok)throw new Error("Firebase DELETE "+r.status)}
+async function fbPut(url,value){
+  const r=await tjkFirebaseFetch(url,{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(value)});
+  return r.json().catch(()=>null);
+}
+async function fbDelete(url){await tjkFirebaseFetch(url,{method:"DELETE"})}
 function setNestedValue(root,path,data,isPatch){
   const parts=String(path||"/").split("/").filter(Boolean);
   if(!parts.length){if(isPatch&&root&&typeof root==="object"&&data&&typeof data==="object"){Object.assign(root,data);return root}return data&&typeof data==="object"?data:{}}
@@ -427,13 +500,30 @@ async function processState(){
   if(ans&&obsPc&&ans.sessionId===obsSessionId&&ans.description&&!obsPc.remoteDescription){await obsPc.setRemoteDescription(ans.description);obsAnswerSessionId=ans.sessionId;setStatus("OBS WebRTC connected / negotiating.")}
   await processStaffRequests();
 }
-function openStream(){
+async function openStream(){
   if(firebaseStream)try{firebaseStream.close()}catch(e){}
-  firebaseView={};firebaseStream=new EventSource(`${FIREBASE_BASE}/devices/${encodeURIComponent(deviceId)}/videoUnified.json`);
+  firebaseView={};tjkFirebaseStreamHealthy=false;
+  try{await tjkSelectFirebaseServer()}
+  catch(err){setStatus("Firebase unavailable.");startFirebaseFallbackPolling();return}
+  firebaseStream=new EventSource(`${FIREBASE_BASE}/devices/${encodeURIComponent(deviceId)}/videoUnified.json`);
   const handle=(ev,patch)=>{try{const m=JSON.parse(ev.data||"{}");firebaseView=setNestedValue(firebaseView,m.path,m.data,patch);processState().catch(console.error)}catch(e){console.error(e)}};
   firebaseStream.addEventListener("put",e=>handle(e,false));firebaseStream.addEventListener("patch",e=>handle(e,true));
-  firebaseStream.onopen=()=>{setStatus("NO VIDEO FEED LOADED");if(!state||String(state.sourceType)!=="youtube")showNoFeedScreen()};
-  firebaseStream.onerror=()=>setStatus("Firebase reconnecting…");
+  firebaseStream.onopen=()=>{tjkFirebaseStreamHealthy=true;stopFirebaseFallbackPolling();setStatus("NO VIDEO FEED LOADED");if(!state||String(state.sourceType)!=="youtube")showNoFeedScreen()};
+  firebaseStream.onerror=()=>{tjkFirebaseStreamHealthy=false;startFirebaseFallbackPolling();setStatus("Firebase reconnecting…")};
+}
+function stopFirebaseFallbackPolling(){
+  if(tjkFirebaseFallbackTimer){clearInterval(tjkFirebaseFallbackTimer);tjkFirebaseFallbackTimer=null}
+}
+function startFirebaseFallbackPolling(){
+  if(tjkFirebaseFallbackTimer||!deviceId)return;
+  const poll=async()=>{
+    if(tjkFirebaseStreamHealthy){stopFirebaseFallbackPolling();return}
+    try{
+      const data=await fbGet(`${FIREBASE_BASE}/devices/${encodeURIComponent(deviceId)}/videoUnified.json`);
+      if(data&&typeof data==="object"){firebaseView=data;await processState()}
+    }catch(_){}
+  };
+  poll();tjkFirebaseFallbackTimer=setInterval(poll,TJK_FIREBASE_FALLBACK_POLL_MS);
 }
 function closeObs(){if(obsPc)try{obsPc.close()}catch(e){}obsPc=null;obsSessionId=""}
 function closeStaff(id){const p=staffPeers.get(id);if(p){try{p.close()}catch(e){}staffPeers.delete(id)}}
