@@ -330,7 +330,77 @@ body.fullscreen-idle #topBar{opacity:0;pointer-events:none;}
 <script>
 "use strict";
 
-const FIREBASE_BASE="https://tjk-network-controls-default-rtdb.firebaseio.com";
+const FIREBASE_PRIMARY="https://tjk-network-controls-default-rtdb.firebaseio.com";
+const FIREBASE_BACKUP="https://tjk-network-controls-backup-default-rtdb.firebaseio.com";
+let FIREBASE_BASE=FIREBASE_PRIMARY;
+let tjkFirebaseSelectionPromise=null;
+let tjkFirebaseStreamHealthy=false;
+let tjkFirebaseFallbackTimer=null;
+const TJK_FIREBASE_FALLBACK_POLL_MS=500;
+
+function tjkFirebaseTranslateUrl(url,base){
+  const s=String(url||"");
+  if(s.startsWith(FIREBASE_PRIMARY))return base+s.slice(FIREBASE_PRIMARY.length);
+  if(s.startsWith(FIREBASE_BACKUP))return base+s.slice(FIREBASE_BACKUP.length);
+  return s;
+}
+async function tjkFirebaseFetch(url,options={}){
+  const activeUrl=tjkFirebaseTranslateUrl(url,FIREBASE_BASE);
+  try{
+    const r=await fetch(activeUrl,{...options,cache:"no-store"});
+    if(!r.ok){
+      const body=await r.text().catch(()=>"");
+      const e=new Error(`Firebase ${options.method||"GET"} ${r.status}${body?" — "+body.slice(0,180):""}`);
+      e.status=r.status;
+      throw e;
+    }
+    return r;
+  }catch(primaryError){
+    if(FIREBASE_BASE!==FIREBASE_PRIMARY)throw primaryError;
+    const backupUrl=tjkFirebaseTranslateUrl(url,FIREBASE_BACKUP);
+    const r=await fetch(backupUrl,{...options,cache:"no-store"});
+    if(!r.ok){
+      const body=await r.text().catch(()=>"");
+      const e=new Error(`Backup Firebase ${options.method||"GET"} ${r.status}${body?" — "+body.slice(0,180):""}`);
+      e.status=r.status;
+      throw e;
+    }
+    FIREBASE_BASE=FIREBASE_BACKUP;
+    tjkFirebaseStreamHealthy=false;
+    setTimeout(()=>{
+      try{
+        if(typeof openFirebaseStream==="function")openFirebaseStream();
+        else if(typeof openStream==="function")openStream();
+      }catch(_){}
+    },0);
+    return r;
+  }
+}
+async function tjkFirebaseProbe(base){
+  const r=await fetch(base+"/.json?shallow=true",{method:"GET",cache:"no-store"});
+  if(!r.ok)throw new Error(`Firebase probe ${r.status}`);
+  return true;
+}
+async function tjkSelectFirebaseServer(){
+  if(FIREBASE_BASE===FIREBASE_BACKUP)return FIREBASE_BASE;
+  if(tjkFirebaseSelectionPromise)return tjkFirebaseSelectionPromise;
+  tjkFirebaseSelectionPromise=(async()=>{
+    try{
+      await tjkFirebaseProbe(FIREBASE_PRIMARY);
+      FIREBASE_BASE=FIREBASE_PRIMARY;
+    }catch(_){
+      await tjkFirebaseProbe(FIREBASE_BACKUP);
+      FIREBASE_BASE=FIREBASE_BACKUP;
+    }
+    return FIREBASE_BASE;
+  })();
+  try{return await tjkFirebaseSelectionPromise}
+  finally{tjkFirebaseSelectionPromise=null}
+}
+async function fbGet(url){
+  const r=await tjkFirebaseFetch(url,{method:"GET"});
+  return r.json().catch(()=>null);
+}
 const DEVICE_STORAGE_KEY="tjk-staff-video-device-id-v2";
 const DEVICE_TAB_SESSION_KEY="tjk-staff-video-device-tab-session-v1";
 const CLIENT_STORAGE_KEY="tjk-staff-video-client-id-v2";
@@ -895,18 +965,11 @@ function streamPath(){
 }
 
 async function fbPut(url,value){
-  const r=await fetch(url,{
-    method:"PUT",
-    headers:{"Content-Type":"application/json"},
-    body:JSON.stringify(value),
-    cache:"no-store"
-  });
-  if(!r.ok)throw new Error(`Firebase PUT ${r.status}`);
+  const r=await tjkFirebaseFetch(url,{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(value)});
   return r.json().catch(()=>null);
 }
 async function fbDelete(url,keepalive=false){
-  const r=await fetch(url,{method:"DELETE",cache:"no-store",keepalive});
-  if(!r.ok)throw new Error(`Firebase DELETE ${r.status}`);
+  await tjkFirebaseFetch(url,{method:"DELETE",keepalive});
 }
 
 function setNestedValue(root,path,data,isPatch){
@@ -2732,9 +2795,12 @@ function processFirebaseSnapshot(){
   }
 }
 
-function openFirebaseStream(){
+async function openFirebaseStream(){
   closeFirebaseStream();
   firebaseView={};
+  tjkFirebaseStreamHealthy=false;
+  try{await tjkSelectFirebaseServer()}
+  catch(err){setConnection("FIREBASE UNAVAILABLE");startFirebaseFallbackPolling();return}
 
   firebaseStream=new EventSource(streamPath());
 
@@ -2752,13 +2818,30 @@ function openFirebaseStream(){
   firebaseStream.addEventListener("patch",ev=>handle(ev,true));
 
   firebaseStream.onopen=()=>{
-    setConnection("FIREBASE CONNECTED");
+    tjkFirebaseStreamHealthy=true;
+    stopFirebaseFallbackPolling();
+    setConnection(FIREBASE_BASE===FIREBASE_BACKUP?"FIREBASE CONNECTED — BACKUP":"FIREBASE CONNECTED");
   };
   firebaseStream.onerror=()=>{
-    if(!rawPc||rawPc.connectionState!=="connected"){
-      setConnection("FIREBASE RECONNECTING");
-    }
+    tjkFirebaseStreamHealthy=false;
+    startFirebaseFallbackPolling();
+    if(!rawPc||rawPc.connectionState!=="connected")setConnection("FIREBASE RECONNECTING");
   };
+}
+function stopFirebaseFallbackPolling(){
+  if(tjkFirebaseFallbackTimer){clearInterval(tjkFirebaseFallbackTimer);tjkFirebaseFallbackTimer=null}
+}
+function startFirebaseFallbackPolling(){
+  if(tjkFirebaseFallbackTimer||!deviceId)return;
+  const poll=async()=>{
+    if(tjkFirebaseStreamHealthy){stopFirebaseFallbackPolling();return}
+    try{
+      const data=await fbGet(streamPath());
+      if(data&&typeof data==="object"){firebaseView=data;await processFirebaseSnapshot()}
+    }catch(_){}
+  };
+  poll();
+  tjkFirebaseFallbackTimer=setInterval(poll,TJK_FIREBASE_FALLBACK_POLL_MS);
 }
 
 function closeFirebaseStream(){
