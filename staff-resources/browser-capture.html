@@ -487,11 +487,24 @@ function setNestedValue(root,path,data,isPatch){
 }
 
 function updateCaptureSenderButtons(){
-  const enabled=!!(productionDeviceId && state && state.sourceType==="nfhs");
+  const presence=firebaseView && firebaseView.controlPresence;
+  const presenceFresh=!!(
+    presence &&
+    presence.online===true &&
+    presence.page==="video-controls" &&
+    Number.isFinite(Number(presence.lastSeen)) &&
+    (Date.now()-Number(presence.lastSeen))<=25000
+  );
+  const nfhsSelected=presenceFresh && String(presence.sourceType||"")==="nfhs";
+  const enabled=!!(productionDeviceId && nfhsSelected);
+
   startCaptureBtn.disabled=!enabled;
   sendObsBtn.disabled=!(enabled && captureStream);
   stopCaptureBtn.disabled=!(enabled && captureStream);
-  if(!enabled){
+
+  if(!presenceFresh){
+    captureView.textContent="Inactive — Video Controls is not online for this Device ID.";
+  }else if(!nfhsSelected){
     captureView.textContent="Inactive — select NFHS / Browser Capture in Video Controls.";
   }else if(!captureStream){
     captureView.textContent="Ready — capture the NFHS tab/window.";
@@ -530,7 +543,14 @@ function processFirebaseSnapshot(){
   renderDeviceStatus();
   updateSourceUi();
   updateCaptureSenderButtons();
-  if((!state || state.sourceType!=="nfhs") && (captureStream || pc)){
+  const presence=firebaseView && firebaseView.controlPresence;
+  const captureAuthorized=!!(
+    presence && presence.online===true && presence.page==="video-controls" &&
+    String(presence.sourceType||"")==="nfhs" &&
+    Number.isFinite(Number(presence.lastSeen)) &&
+    (Date.now()-Number(presence.lastSeen))<=25000
+  );
+  if(!captureAuthorized && (captureStream || pc)){
     stopRawSession(true).catch(()=>{});
   }
 }
@@ -806,7 +826,6 @@ async function setProductionDeviceId(value,{closeGate=true}={}){
 
   try{
     openFirebaseStream();
-    startControlPresence();
     setStatus("Connected through Device ID "+id+".");
   }catch(err){
     console.error("Device ID connection:",err);
@@ -845,7 +864,6 @@ async function linkDeviceIdFile(){
     renderDeviceStatus();
     setStatus("Device ID linked.");
     openFirebaseStream();
-    startControlPresence();
   }catch(err){
     if(err&&err.name==="AbortError")return;
     console.error(err);
@@ -1326,24 +1344,18 @@ async function requestStaffViewerSync(reason="manual"){
 
 
 
-window.addEventListener("pagehide",()=>{
-  if(!productionDeviceId)return;
-  try{
-    fetch(controlPresencePath(),{
-      method:"PUT",
-      headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({
-        online:false,
-        deviceId:productionDeviceId,
-        sessionId:CONTROL_PRESENCE_SESSION_ID,
-        lastSeen:Date.now(),
-        page:"video-controls"
-      }),
-      cache:"no-store",
-      keepalive:true
-    }).catch(()=>{});
-  }catch(_){}
-});
+
+
+
+// Re-evaluate Video Controls heartbeat freshness even when Firebase sends no new event.
+setInterval(()=>{
+  updateCaptureSenderButtons();
+  const presence=firebaseView && firebaseView.controlPresence;
+  const authorized=!!(presence && presence.online===true && presence.page==="video-controls" &&
+    String(presence.sourceType||"")==="nfhs" && Number.isFinite(Number(presence.lastSeen)) &&
+    (Date.now()-Number(presence.lastSeen))<=25000);
+  if(!authorized && (captureStream || pc))stopRawSession(true).catch(()=>{});
+},1000);
 
 </script>
 </body>
