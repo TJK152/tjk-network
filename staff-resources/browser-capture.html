@@ -486,6 +486,19 @@ function setNestedValue(root,path,data,isPatch){
   return root;
 }
 
+function isCaptureAuthorized(){
+  const presence=firebaseView && firebaseView.controlPresence;
+  return !!(
+    productionDeviceId &&
+    presence &&
+    presence.online===true &&
+    presence.page==="video-controls" &&
+    String(presence.sourceType||"")==="nfhs" &&
+    Number.isFinite(Number(presence.lastSeen)) &&
+    (Date.now()-Number(presence.lastSeen))<=25000
+  );
+}
+
 function updateCaptureSenderButtons(){
   const presence=firebaseView && firebaseView.controlPresence;
   const presenceFresh=!!(
@@ -496,7 +509,7 @@ function updateCaptureSenderButtons(){
     (Date.now()-Number(presence.lastSeen))<=25000
   );
   const nfhsSelected=presenceFresh && String(presence.sourceType||"")==="nfhs";
-  const enabled=!!(productionDeviceId && nfhsSelected);
+  const enabled=isCaptureAuthorized();
 
   startCaptureBtn.disabled=!enabled;
   sendObsBtn.disabled=!(enabled && captureStream);
@@ -1108,7 +1121,7 @@ function teardownPeer(){
 
 async function startCapture(){
   if(!productionDeviceId){setStatus("Enter a Device ID first.");return}
-  if(!state || state.sourceType!=="nfhs"){setStatus("NFHS / Browser Capture is not selected in Video Controls.");updateCaptureSenderButtons();return}
+  if(!isCaptureAuthorized()){setStatus("NFHS / Browser Capture is not selected in Video Controls.");updateCaptureSenderButtons();return}
   try{
     captureView.textContent="Requesting 1080p30 capture…";
     const stream=await navigator.mediaDevices.getDisplayMedia({
@@ -1138,9 +1151,20 @@ async function startCapture(){
 
 async function sendRawToObs(){
   if(!productionDeviceId){setStatus("Enter a Device ID first.");return}
-  if(!state || state.sourceType!=="nfhs"){setStatus("NFHS / Browser Capture is not selected in Video Controls.");updateCaptureSenderButtons();return}
+  if(!isCaptureAuthorized()){setStatus("NFHS / Browser Capture is not selected in Video Controls.");updateCaptureSenderButtons();return}
   if(!captureStream){setStatus("Capture the NFHS tab/window first.");return}
   teardownPeer();
+
+  // The Video Controls dropdown is only a selection gate. Once SEND is pressed,
+  // publish NFHS as the actual production source so the OBS player switches to
+  // the raw WebRTC receiver exactly like the original integrated sender did.
+  const now=Date.now();
+  state={
+    ...state,
+    sourceType:"nfhs",sourceUrl:"",sourceId:"",sourceRevision:now,playing:true,
+    targetLatencySeconds:0,command:"raw",commandId:"cmd-"+now,updatedAt:now
+  };
+  await publishState(state);
 
   sessionId=`${Date.now()}-${Math.random().toString(36).slice(2,10)}`;
   pc=new RTCPeerConnection({iceServers:[
