@@ -366,6 +366,7 @@ let state={
 let captureStream=null;
 let pc=null;
 let sessionId=null;
+let productionTuneTimer=null;
 let firebaseStream=null;
 let firebaseView={};
 let firebaseConnected=false;
@@ -909,7 +910,7 @@ async function tuneCapturedVideoTrack(stream){
     await track.applyConstraints({
       width:{ideal:VIDEO_WIDTH,max:VIDEO_WIDTH},
       height:{ideal:VIDEO_HEIGHT,max:VIDEO_HEIGHT},
-      frameRate:{ideal:VIDEO_FPS,max:VIDEO_FPS}
+      frameRate:{min:VIDEO_FPS,ideal:VIDEO_FPS,max:VIDEO_FPS}
     });
   }catch(err){console.warn("Capture constraints:",err)}
 }
@@ -1122,6 +1123,7 @@ function closeAllStaffPeers(){
 }
 
 function teardownPeer(){
+  if(productionTuneTimer){clearInterval(productionTuneTimer);productionTuneTimer=null}
   if(pc){try{pc.close()}catch(_){}pc=null}
 }
 
@@ -1134,7 +1136,7 @@ async function startCapture(){
       video:{
         width:{ideal:VIDEO_WIDTH,max:VIDEO_WIDTH},
         height:{ideal:VIDEO_HEIGHT,max:VIDEO_HEIGHT},
-        frameRate:{ideal:VIDEO_FPS,max:VIDEO_FPS}
+        frameRate:{min:VIDEO_FPS,ideal:VIDEO_FPS,max:VIDEO_FPS}
       },
       audio:true
     });
@@ -1188,11 +1190,31 @@ async function sendRawToObs(){
   }
 
   pc.onconnectionstatechange=()=>{
-    if(pc)captureView.textContent=`NFHS WebRTC: ${pc.connectionState}`;
+    if(!pc)return;
+    captureView.textContent=`NFHS WebRTC: ${pc.connectionState}`;
+    if(pc.connectionState==="connected"){
+      const sender=pc.getSenders().find(s=>s.track&&s.track.kind==="video");
+      if(sender)tuneVideoSender(sender).catch(()=>{});
+    }
   };
 
   const offer=await pc.createOffer({offerToReceiveAudio:false,offerToReceiveVideo:false});
   await pc.setLocalDescription(offer);
+
+  // Re-apply the production 1080p30 sender policy after SDP negotiation.
+  // Chromium can rebuild encoder parameters while creating the offer.
+  const productionVideoSender=pc.getSenders().find(s=>s.track&&s.track.kind==="video");
+  if(productionVideoSender)await tuneVideoSender(productionVideoSender);
+
+  // Keep the production sender pinned to the intended cadence. This is a
+  // lightweight parameter reassertion only; it does not restart capture or
+  // renegotiate WebRTC and it never changes the staff sender settings.
+  productionTuneTimer=setInterval(()=>{
+    if(!pc || pc.connectionState==="closed" || pc.connectionState==="failed")return;
+    const sender=pc.getSenders().find(s=>s.track&&s.track.kind==="video");
+    if(sender)tuneVideoSender(sender).catch(()=>{});
+  },5000);
+
   await waitIceComplete(pc);
   await fbPut(rawPath("session"),{
     id:sessionId,createdAt:Date.now(),offer:pc.localDescription,
