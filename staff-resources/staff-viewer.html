@@ -304,8 +304,8 @@ body.fullscreen-idle #topBar{opacity:0;pointer-events:none;}
     </div>
 
     <select id="quality" aria-label="Video quality">
-      <option value="auto">Auto</option>
-      <option value="1080" selected>1080p30 — High</option>
+      <option value="auto" selected>Auto</option>
+      <option value="1080">1080p30 — High</option>
       <option value="720">720p30</option>
       <option value="540">540p30</option>
       <option value="480">480p30</option>
@@ -3140,7 +3140,7 @@ window.addEventListener("beforeunload",()=>{
 
   const savedQuality=localStorage.getItem(QUALITY_STORAGE_KEY);
   if(["auto","1080","720","540","480","360"].includes(savedQuality))quality.value=savedQuality;
-  else quality.value="1080";
+  else quality.value="auto";
 
   // Every page load starts Staff audio at full volume and unmuted.
   // Do not restore a stale muted/0% state from an earlier tab or refresh.
