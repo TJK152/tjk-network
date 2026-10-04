@@ -378,6 +378,20 @@ a different quality without affecting the OBS connection.
 const staffPeers=new Map();
 const staffRequestSignatures=new Map();
 
+// STAFF ISOLATION V7: Staff Viewer never receives the production capture track.
+// A single lightweight 960x540@30 canvas track is derived from the master capture
+// and shared as the source for all staff peer connections.
+let staffPreviewVideo=null;
+let staffPreviewCanvas=null;
+let staffPreviewCtx=null;
+let staffPreviewStream=null;
+let staffPreviewVideoTrack=null;
+let staffPreviewRaf=0;
+const STAFF_PREVIEW_WIDTH=960;
+const STAFF_PREVIEW_HEIGHT=540;
+const STAFF_PREVIEW_FPS=30;
+const STAFF_PREVIEW_MAX_BITRATE=1800000;
+
 function setStatus(msg){status.textContent=msg}
 function youtubeSenderOnline(){
   const p=firebaseView&&firebaseView.youtubeSenderPresence;
@@ -931,29 +945,77 @@ async function tuneVideoSender(sender){
 }
 
 
-const STAFF_QUALITY_PROFILES={
-  // Auto may adapt both picture size and bitrate, up to 1080p30 / 5 Mbps.
-  "auto":{
-    width:1920,height:1080,fps:30,maxBitrate:5000000,scale:1,auto:true
-  },
-  // Manual choices lock the requested output resolution. WebRTC may adapt
-  // bitrate below the ceiling, but maintain-resolution prevents normal
-  // congestion control from silently stepping down to a lower resolution.
-  "1080":{
-    width:1920,height:1080,fps:30,maxBitrate:5000000,scale:1
-  },
-  "720":{
-    width:1280,height:720,fps:30,maxBitrate:3000000,scale:1.5
-  },
-  "540":{
-    width:960,height:540,fps:30,maxBitrate:2000000,scale:2
-  },
-  "480":{
-    width:854,height:480,fps:30,maxBitrate:1500000,scale:2.25
-  },
-  "360":{
-    width:640,height:360,fps:30,maxBitrate:1000000,scale:3
+async function ensureStaffPreviewStream(){
+  if(staffPreviewStream && staffPreviewVideoTrack && staffPreviewVideoTrack.readyState==="live")return staffPreviewStream;
+  if(!captureStream)return null;
+
+  stopStaffPreviewStream();
+
+  const sourceVideo=captureStream.getVideoTracks()[0];
+  if(!sourceVideo)return null;
+
+  staffPreviewVideo=document.createElement("video");
+  staffPreviewVideo.muted=true;
+  staffPreviewVideo.playsInline=true;
+  staffPreviewVideo.autoplay=true;
+  staffPreviewVideo.srcObject=new MediaStream([sourceVideo]);
+  try{await staffPreviewVideo.play()}catch(_){}
+
+  staffPreviewCanvas=document.createElement("canvas");
+  staffPreviewCanvas.width=STAFF_PREVIEW_WIDTH;
+  staffPreviewCanvas.height=STAFF_PREVIEW_HEIGHT;
+  staffPreviewCtx=staffPreviewCanvas.getContext("2d",{alpha:false,desynchronized:true});
+
+  let lastDraw=0;
+  const interval=1000/STAFF_PREVIEW_FPS;
+  const draw=(now)=>{
+    if(!staffPreviewCanvas || !staffPreviewCtx || !staffPreviewVideo)return;
+    if(now-lastDraw>=interval-1){
+      lastDraw=now;
+      try{staffPreviewCtx.drawImage(staffPreviewVideo,0,0,STAFF_PREVIEW_WIDTH,STAFF_PREVIEW_HEIGHT)}catch(_){}
+    }
+    staffPreviewRaf=requestAnimationFrame(draw);
+  };
+  staffPreviewRaf=requestAnimationFrame(draw);
+
+  const canvasStream=staffPreviewCanvas.captureStream(STAFF_PREVIEW_FPS);
+  staffPreviewVideoTrack=canvasStream.getVideoTracks()[0]||null;
+  if(staffPreviewVideoTrack)try{staffPreviewVideoTrack.contentHint="motion"}catch(_){}
+
+  const tracks=[];
+  if(staffPreviewVideoTrack)tracks.push(staffPreviewVideoTrack);
+  // Audio is cheap compared with video and remains independent from video sizing.
+  const sourceAudio=captureStream.getAudioTracks()[0];
+  if(sourceAudio)tracks.push(sourceAudio.clone());
+  staffPreviewStream=new MediaStream(tracks);
+  return staffPreviewStream;
+}
+
+function stopStaffPreviewStream(){
+  if(staffPreviewRaf){cancelAnimationFrame(staffPreviewRaf);staffPreviewRaf=0}
+  if(staffPreviewStream){
+    for(const t of staffPreviewStream.getTracks())try{t.stop()}catch(_){}
   }
+  if(staffPreviewVideo){
+    try{staffPreviewVideo.pause()}catch(_){}
+    try{staffPreviewVideo.srcObject=null}catch(_){}
+  }
+  staffPreviewStream=null;
+  staffPreviewVideoTrack=null;
+  staffPreviewCtx=null;
+  staffPreviewCanvas=null;
+  staffPreviewVideo=null;
+}
+
+const STAFF_QUALITY_PROFILES={
+  // Staff is monitoring only. Every selection is intentionally capped at the
+  // isolated 960x540@30 preview so a viewer can never request a second 1080p encode.
+  "auto":{width:960,height:540,fps:30,maxBitrate:1800000,scale:1,auto:true},
+  "1080":{width:960,height:540,fps:30,maxBitrate:1800000,scale:1},
+  "720":{width:960,height:540,fps:30,maxBitrate:1800000,scale:1},
+  "540":{width:960,height:540,fps:30,maxBitrate:1800000,scale:1},
+  "480":{width:854,height:480,fps:30,maxBitrate:1400000,scale:1.125},
+  "360":{width:640,height:360,fps:30,maxBitrate:1000000,scale:1.5}
 };
 
 function getStaffQualityProfile(key){
@@ -1009,17 +1071,14 @@ async function answerStaffRequest(clientId,request){
   const quality=String(request.quality||"720");
   const profile=getStaffQualityProfile(quality);
 
+  // Never clone or constrain the 1080p production video track for staff.
+  // Staff uses one shared 960x540@30 canvas-derived monitoring source.
+  const sharedStaffStream=await ensureStaffPreviewStream();
+  if(!sharedStaffStream){closeStaffPeer(clientId);return}
   const staffStream=new MediaStream();
-  for(const sourceTrack of captureStream.getTracks()){
-    /*
-      HARD ISOLATION: every staff connection gets its own cloned tracks.
-      Staff resolution/bitrate changes are applied only to that peer's sender;
-      the original 1080p30 capture track and OBS RTCRtpSender are untouched.
-    */
+  for(const sourceTrack of sharedStaffStream.getTracks()){
+    // Per-peer clones come only from the already-downscaled staff source.
     const staffTrack=sourceTrack.clone();
-    if(staffTrack.kind==="video"){
-      try{staffTrack.contentHint="motion"}catch(_){}
-    }
     staffStream.addTrack(staffTrack);
     const sender=peer.addTrack(staffTrack,staffStream);
     if(staffTrack.kind==="video"){
@@ -1042,14 +1101,6 @@ async function answerStaffRequest(clientId,request){
   await waitIceComplete(peer);
 
   if(staffPeers.get(clientId)!==peer)return;
-
-  // Reassert the production OBS sender after any staff renegotiation. This is
-  // defensive only; staff now uses cloned tracks and separate sender settings.
-  if(pc){
-    for(const sender of pc.getSenders()){
-      if(sender&&sender.track&&sender.track.kind==="video")await tuneVideoSender(sender);
-    }
-  }
 
   await fbPut(staffClientPath(clientId,"answer"),{
     requestId:String(request.requestId||""),
@@ -1129,6 +1180,7 @@ async function startCapture(){
     await tuneCapturedVideoTrack(stream);
     if(captureStream){
       closeAllStaffPeers();
+      stopStaffPreviewStream();
       captureStream.getTracks().forEach(t=>t.stop());
     }
     captureStream=stream;
@@ -1141,6 +1193,23 @@ async function startCapture(){
     captureView.textContent="Capture cancelled / failed";
     console.error(err);
   }
+}
+
+function primeProductionVideoSdp(description){
+  // Chromium/WebRTC normally starts conservatively and ramps upward. For this
+  // controlled LAN/production use, hint H.264 to begin near the production rate
+  // so the first seconds do not spend as long in the low-quality/choppy ramp.
+  if(!description || !description.sdp)return description;
+  let sdp=description.sdp;
+  const videoSectionMatch=sdp.match(/m=video[\s\S]*?(?=\r?\nm=|$)/);
+  if(!videoSectionMatch)return description;
+  let section=videoSectionMatch[0];
+  section=section.replace(/(a=fmtp:\d+[^\r\n]*packetization-mode=1[^\r\n]*)/g,(line)=>{
+    if(/x-google-start-bitrate=/i.test(line))return line;
+    return line+";x-google-start-bitrate=5000;x-google-min-bitrate=3500;x-google-max-bitrate=5500";
+  });
+  sdp=sdp.replace(videoSectionMatch[0],section);
+  return {type:description.type,sdp};
 }
 
 async function sendRawToObs(){
@@ -1176,11 +1245,17 @@ async function sendRawToObs(){
   }
 
   pc.onconnectionstatechange=()=>{
-    if(pc)captureView.textContent=`NFHS WebRTC: ${pc.connectionState}`;
+    if(!pc)return;
+    captureView.textContent=`NFHS WebRTC: ${pc.connectionState}`;
+    if(pc.connectionState==="connected"){
+      const sender=pc.getSenders().find(s=>s.track&&s.track.kind==="video");
+      if(sender)tuneVideoSender(sender).catch(()=>{});
+    }
   };
 
   const offer=await pc.createOffer({offerToReceiveAudio:false,offerToReceiveVideo:false});
-  await pc.setLocalDescription(offer);
+  const primedOffer=primeProductionVideoSdp(offer);
+  await pc.setLocalDescription(primedOffer);
   await waitIceComplete(pc);
   await fbPut(rawPath("session"),{
     id:sessionId,createdAt:Date.now(),offer:pc.localDescription,
@@ -1199,6 +1274,8 @@ async function stopRawSession(stopCaptureToo=true){
     try{await fbDelete(rawPath("session"));await fbDelete(rawPath("answer"))}catch(_){}
   }
   if(stopCaptureToo&&captureStream){
+    closeAllStaffPeers();
+    stopStaffPreviewStream();
     captureStream.getTracks().forEach(t=>t.stop());
     captureStream=null;
     captureView.textContent="Inactive";
