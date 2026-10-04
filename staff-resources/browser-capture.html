@@ -486,46 +486,34 @@ function setNestedValue(root,path,data,isPatch){
   return root;
 }
 
-function getVideoControlsPresenceStatus(){
-  const presence=firebaseView && firebaseView.controlPresence;
-  const age=presence && Number.isFinite(Number(presence.lastSeen))
-    ? Math.max(0,Date.now()-Number(presence.lastSeen))
-    : Infinity;
-  const valid=!!(presence && presence.online===true && presence.page==="video-controls");
+function getVideoControlsSelection(){
+  const selection=firebaseView && firebaseView.controlSelection;
   return {
-    presence,
-    age,
-    valid,
-    fresh:valid && age<=30000,
-    grace:valid && age<=120000,
-    nfhs:valid && String(presence.sourceType||"")==="nfhs"
+    selection,
+    valid:!!(selection && selection.page==="video-controls"),
+    sourceType:String((selection&&selection.sourceType)||"off"),
+    nfhs:!!(selection && selection.page==="video-controls" && String(selection.sourceType||"")==="nfhs")
   };
 }
 
 function isCaptureAuthorized(){
-  const p=getVideoControlsPresenceStatus();
-  // Starting a NEW capture requires a fresh Video Controls heartbeat.
-  // Once capture is active, tolerate temporary Wix/background timer stalls so
-  // a brief heartbeat gap cannot tear down a live production capture.
-  return !!(productionDeviceId && p.nfhs && (p.fresh || ((captureStream || pc) && p.grace)));
+  const s=getVideoControlsSelection();
+  // Authorization is based only on the explicit persistent dropdown selection.
+  // Heartbeat/EventSource timing can no longer flicker this on and off.
+  return !!(productionDeviceId && s.nfhs);
 }
 
 function updateCaptureSenderButtons(){
-  const p=getVideoControlsPresenceStatus();
-  const active=!!(captureStream || pc);
-  const enabled=!!(productionDeviceId && p.nfhs && (p.fresh || (active && p.grace)));
+  const s=getVideoControlsSelection();
+  const enabled=!!(productionDeviceId && s.nfhs);
 
   startCaptureBtn.disabled=!enabled;
   sendObsBtn.disabled=!(enabled && captureStream);
-  stopCaptureBtn.disabled=!(captureStream); // Always let the operator stop an active local capture.
+  stopCaptureBtn.disabled=!(captureStream);
 
-  if(active && p.nfhs && !p.fresh && p.grace){
-    // Do not replace the active-capture status text during a temporary heartbeat gap.
-    return;
-  }
-  if(!p.valid || (!p.fresh && !active)){
-    captureView.textContent="Inactive — Video Controls is not online for this Device ID.";
-  }else if(!p.nfhs){
+  if(!s.valid){
+    captureView.textContent="Inactive — Video Controls has not published a source selection for this Device ID.";
+  }else if(!s.nfhs){
     captureView.textContent="Inactive — select NFHS / Browser Capture in Video Controls.";
   }else if(!captureStream){
     captureView.textContent="Ready — capture the NFHS tab/window.";
@@ -565,11 +553,11 @@ function processFirebaseSnapshot(){
   updateSourceUi();
   updateCaptureSenderButtons();
 
-  const p=getVideoControlsPresenceStatus();
-  // Only an explicit, fresh change away from NFHS immediately stops capture.
-  // A stale/missed heartbeat gets a 2-minute grace period instead of killing
-  // the production screen capture mid-game.
-  if((captureStream || pc) && ((p.fresh && !p.nfhs) || !p.grace)){
+  const selection=getVideoControlsSelection();
+  // Stop only when Video Controls explicitly publishes a source other than NFHS.
+  // Heartbeat age, reconnects, partial stream updates, and Wix timer stalls are
+  // intentionally ignored so they can never tear down a live capture.
+  if((captureStream || pc) && selection.valid && !selection.nfhs){
     stopRawSession(true).catch(()=>{});
   }
 }
