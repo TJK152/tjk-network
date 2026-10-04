@@ -312,15 +312,47 @@ function sourceKey(s){return JSON.stringify([s&&s.sourceRevision||0,s&&s.sourceI
 function waitIceComplete(pc,ms=4000){if(pc.iceGatheringState==="complete")return Promise.resolve();return new Promise(res=>{let done=false;const finish=()=>{if(done)return;done=true;pc.removeEventListener("icegatheringstatechange",check);res()},check=()=>{if(pc.iceGatheringState==="complete")finish()};pc.addEventListener("icegatheringstatechange",check);setTimeout(finish,ms)})}
 function preferH264(t){try{if(!t||!t.setCodecPreferences)return;const c=RTCRtpSender.getCapabilities("video").codecs,h=c.filter(x=>x.mimeType.toLowerCase()==="video/h264"),r=c.filter(x=>x.mimeType.toLowerCase()!=="video/h264");if(h.length)t.setCodecPreferences([...h,...r])}catch(e){}}
 async function tuneSender(sender,maxBitrate=VIDEO_MAX_BITRATE){
+  if(!sender||!sender.track||sender.track.kind!=="video")return;
   try{
     const p=sender.getParameters();
     if(!p.encodings||!p.encodings.length)p.encodings=[{}];
-    p.encodings[0].maxBitrate=maxBitrate;
-    p.encodings[0].maxFramerate=VIDEO_FPS;
-    p.encodings[0].scaleResolutionDownBy=1;
+    for(const e of p.encodings){
+      e.maxBitrate=maxBitrate;
+      e.maxFramerate=VIDEO_FPS;
+      e.scaleResolutionDownBy=1;
+      try{e.priority="high"}catch(_){}
+      try{e.networkPriority="high"}catch(_){}
+    }
     p.degradationPreference="maintain-resolution";
     await sender.setParameters(p);
-  }catch(e){}
+  }catch(e){console.warn("OBS sender tuning:",e)}
+}
+
+const STAFF_QUALITY_PROFILES={
+  "auto":{width:1920,height:1080,fps:30,maxBitrate:5000000,scale:1,auto:true},
+  "1080":{width:1920,height:1080,fps:30,maxBitrate:5000000,scale:1},
+  "720":{width:1280,height:720,fps:30,maxBitrate:3000000,scale:1.5},
+  "540":{width:960,height:540,fps:30,maxBitrate:2000000,scale:2},
+  "480":{width:854,height:480,fps:30,maxBitrate:1500000,scale:2.25},
+  "360":{width:640,height:360,fps:30,maxBitrate:1000000,scale:3}
+};
+function getStaffQualityProfile(key){return STAFF_QUALITY_PROFILES[String(key||"auto")]||STAFF_QUALITY_PROFILES.auto}
+async function tuneStaffSender(sender,qualityKey){
+  if(!sender||!sender.track||sender.track.kind!=="video")return;
+  const q=getStaffQualityProfile(qualityKey);
+  try{
+    const p=sender.getParameters();
+    if(!p.encodings||!p.encodings.length)p.encodings=[{}];
+    for(const e of p.encodings){
+      e.maxBitrate=q.maxBitrate;
+      e.maxFramerate=q.fps;
+      e.scaleResolutionDownBy=q.scale;
+      try{e.priority="low"}catch(_){}
+      try{e.networkPriority="low"}catch(_){}
+    }
+    p.degradationPreference=q.auto?"balanced":"maintain-resolution";
+    await sender.setParameters(p);
+  }catch(e){console.warn("Staff sender tuning:",e)}
 }
 
 function bridgeOrigin(){
@@ -526,7 +558,7 @@ function startFirebaseFallbackPolling(){
   poll();tjkFirebaseFallbackTimer=setInterval(poll,TJK_FIREBASE_FALLBACK_POLL_MS);
 }
 function closeObs(){if(obsPc)try{obsPc.close()}catch(e){}obsPc=null;obsSessionId=""}
-function closeStaff(id){const p=staffPeers.get(id);if(p){try{p.close()}catch(e){}staffPeers.delete(id)}}
+function closeStaff(id){const p=staffPeers.get(id);if(p){try{for(const sender of p.getSenders()){if(sender&&sender.track)try{sender.track.stop()}catch(_){}}}catch(_){}try{p.close()}catch(e){}staffPeers.delete(id)}}
 async function startCapture(){
   if(!deviceId){setStatus("Enter Device ID first.");return}
   if(!youtubeFeedLoaded()){
@@ -576,12 +608,26 @@ async function sendObs(){
 async function answerStaff(id,req){
   if(!captureStream||!req||!req.offer)return;closeStaff(id);
   const pc=new RTCPeerConnection({iceServers:[{urls:"stun:stun.l.google.com:19302"},{urls:"stun:stun1.l.google.com:19302"}]});staffPeers.set(id,pc);
+  const quality=String(req.quality||"auto");
+  const profile=getStaffQualityProfile(quality);
   const stream=new MediaStream();
-  for(const tr of captureStream.getTracks()){const clone=tr.clone();stream.addTrack(clone);const sender=pc.addTrack(clone,stream);if(clone.kind==="video"){preferH264(pc.getTransceivers().find(x=>x.sender===sender));await tuneSender(sender,req.quality==="1080"?5500000:req.quality==="720"?3000000:1600000)}}
+  for(const tr of captureStream.getTracks()){
+    const clone=tr.clone();
+    if(clone.kind==="video")try{clone.contentHint="motion"}catch(_){}
+    stream.addTrack(clone);
+    const sender=pc.addTrack(clone,stream);
+    if(clone.kind==="video"){
+      preferH264(pc.getTransceivers().find(x=>x.sender===sender));
+      await tuneStaffSender(sender,quality);
+    }
+  }
   pc.onconnectionstatechange=()=>{if(["failed","closed"].includes(pc.connectionState))closeStaff(id)};
   await pc.setRemoteDescription(req.offer);const answer=await pc.createAnswer();await pc.setLocalDescription(answer);await waitIceComplete(pc);
   if(staffPeers.get(id)!==pc)return;
-  await fbPut(staffClientPath(id,"answer"),{requestId:String(req.requestId||""),createdAt:Date.now(),description:pc.localDescription,quality:String(req.quality||"720"),sourceType:"youtube-webrtc"});
+  // Staff negotiation must never be allowed to leave the OBS sender at a
+  // browser-chosen lower priority or different production ceiling.
+  if(obsPc){for(const sender of obsPc.getSenders()){if(sender&&sender.track&&sender.track.kind==="video")await tuneSender(sender)}}
+  await fbPut(staffClientPath(id,"answer"),{requestId:String(req.requestId||""),createdAt:Date.now(),description:pc.localDescription,quality,sourceType:"youtube-webrtc",video:{width:profile.width,height:profile.height,fps:profile.fps,maxBitrate:profile.maxBitrate}});
 }
 async function processStaffRequests(){
   const clients=firebaseView&&firebaseView.staff&&firebaseView.staff.clients&&typeof firebaseView.staff.clients==="object"?firebaseView.staff.clients:{};
