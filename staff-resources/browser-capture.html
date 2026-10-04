@@ -486,38 +486,46 @@ function setNestedValue(root,path,data,isPatch){
   return root;
 }
 
-function isCaptureAuthorized(){
+function getVideoControlsPresenceStatus(){
   const presence=firebaseView && firebaseView.controlPresence;
-  return !!(
-    productionDeviceId &&
-    presence &&
-    presence.online===true &&
-    presence.page==="video-controls" &&
-    String(presence.sourceType||"")==="nfhs" &&
-    Number.isFinite(Number(presence.lastSeen)) &&
-    (Date.now()-Number(presence.lastSeen))<=25000
-  );
+  const age=presence && Number.isFinite(Number(presence.lastSeen))
+    ? Math.max(0,Date.now()-Number(presence.lastSeen))
+    : Infinity;
+  const valid=!!(presence && presence.online===true && presence.page==="video-controls");
+  return {
+    presence,
+    age,
+    valid,
+    fresh:valid && age<=30000,
+    grace:valid && age<=120000,
+    nfhs:valid && String(presence.sourceType||"")==="nfhs"
+  };
+}
+
+function isCaptureAuthorized(){
+  const p=getVideoControlsPresenceStatus();
+  // Starting a NEW capture requires a fresh Video Controls heartbeat.
+  // Once capture is active, tolerate temporary Wix/background timer stalls so
+  // a brief heartbeat gap cannot tear down a live production capture.
+  return !!(productionDeviceId && p.nfhs && (p.fresh || ((captureStream || pc) && p.grace)));
 }
 
 function updateCaptureSenderButtons(){
-  const presence=firebaseView && firebaseView.controlPresence;
-  const presenceFresh=!!(
-    presence &&
-    presence.online===true &&
-    presence.page==="video-controls" &&
-    Number.isFinite(Number(presence.lastSeen)) &&
-    (Date.now()-Number(presence.lastSeen))<=25000
-  );
-  const nfhsSelected=presenceFresh && String(presence.sourceType||"")==="nfhs";
-  const enabled=isCaptureAuthorized();
+  const p=getVideoControlsPresenceStatus();
+  const active=!!(captureStream || pc);
+  const enabled=!!(productionDeviceId && p.nfhs && (p.fresh || (active && p.grace)));
 
   startCaptureBtn.disabled=!enabled;
   sendObsBtn.disabled=!(enabled && captureStream);
-  stopCaptureBtn.disabled=!(enabled && captureStream);
+  stopCaptureBtn.disabled=!(captureStream); // Always let the operator stop an active local capture.
 
-  if(!presenceFresh){
+  if(active && p.nfhs && !p.fresh && p.grace){
+    // Do not replace the active-capture status text during a temporary heartbeat gap.
+    return;
+  }
+  if(!p.valid || (!p.fresh && !active)){
     captureView.textContent="Inactive — Video Controls is not online for this Device ID.";
-  }else if(!nfhsSelected){
+  }else if(!p.nfhs){
     captureView.textContent="Inactive — select NFHS / Browser Capture in Video Controls.";
   }else if(!captureStream){
     captureView.textContent="Ready — capture the NFHS tab/window.";
@@ -556,14 +564,12 @@ function processFirebaseSnapshot(){
   renderDeviceStatus();
   updateSourceUi();
   updateCaptureSenderButtons();
-  const presence=firebaseView && firebaseView.controlPresence;
-  const captureAuthorized=!!(
-    presence && presence.online===true && presence.page==="video-controls" &&
-    String(presence.sourceType||"")==="nfhs" &&
-    Number.isFinite(Number(presence.lastSeen)) &&
-    (Date.now()-Number(presence.lastSeen))<=25000
-  );
-  if(!captureAuthorized && (captureStream || pc)){
+
+  const p=getVideoControlsPresenceStatus();
+  // Only an explicit, fresh change away from NFHS immediately stops capture.
+  // A stale/missed heartbeat gets a 2-minute grace period instead of killing
+  // the production screen capture mid-game.
+  if((captureStream || pc) && ((p.fresh && !p.nfhs) || !p.grace)){
     stopRawSession(true).catch(()=>{});
   }
 }
@@ -1371,14 +1377,14 @@ async function requestStaffViewerSync(reason="manual"){
 
 
 
-// Re-evaluate Video Controls heartbeat freshness even when Firebase sends no new event.
+// Re-evaluate Video Controls presence even when Firebase sends no new event.
+// Active capture gets a 2-minute heartbeat grace period to survive Wix/browser
+// timer throttling; a fresh explicit switch away from NFHS still stops instantly.
 setInterval(()=>{
   updateCaptureSenderButtons();
-  const presence=firebaseView && firebaseView.controlPresence;
-  const authorized=!!(presence && presence.online===true && presence.page==="video-controls" &&
-    String(presence.sourceType||"")==="nfhs" && Number.isFinite(Number(presence.lastSeen)) &&
-    (Date.now()-Number(presence.lastSeen))<=25000);
-  if(!authorized && (captureStream || pc))stopRawSession(true).catch(()=>{});
+  if(!(captureStream || pc))return;
+  const p=getVideoControlsPresenceStatus();
+  if((p.fresh && !p.nfhs) || !p.grace)stopRawSession(true).catch(()=>{});
 },1000);
 
 </script>
