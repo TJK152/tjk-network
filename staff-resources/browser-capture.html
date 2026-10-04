@@ -1,0 +1,1350 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>BROWSER CAPTURE</title>
+<style>
+html,body{margin:0;min-height:100%;background:#004CBF;color:#fff;font-family:Arial,sans-serif;}
+body{display:flex;justify-content:center;align-items:flex-start;}
+#panel{width:min(680px,calc(100vw - 28px));margin:24px 0;padding:20px;box-sizing:border-box;border:5px solid #007DFF;border-radius:14px;background:#004CBF;}
+h1{margin:0 0 18px;font-size:24px;}
+.section{margin-top:18px;padding-top:18px;border-top:5px solid #007DFF;}
+label{display:block;margin:10px 0 6px;font-weight:bold;}
+input,select,button{width:100%;box-sizing:border-box;font:inherit;font-weight:bold;border:5px solid #007DFF;border-radius:8px;}
+input,select{padding:10px;background:#fff;color:#0026FF;}
+button{padding:12px;background:#fff;color:#0026FF;cursor:pointer;}
+button:not(:disabled):hover{background:#0093FF;color:#fff;}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
+.grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;}
+.small{font-size:13px;line-height:1.4;}
+#status{margin-top:14px;font-weight:bold;min-height:20px;}
+.code{font-family:monospace;word-break:break-all;background:rgba(0,0,0,.15);padding:10px;border-radius:7px;margin-top:7px;}
+@media(max-width:560px){.grid2,.grid3{grid-template-columns:1fr;}}
+
+/* Rounded-square video transport controls */
+.transport-grid{
+  display:grid;
+  grid-template-columns:repeat(3,64px);
+  gap:10px;
+  justify-content:center;
+  align-items:center;
+}
+.transport-btn{
+  width:64px;
+  min-width:64px;
+  height:64px;
+  min-height:64px;
+  padding:0;
+  border-radius:16px;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  flex:0 0 64px;
+  font:700 28px Arial,sans-serif;
+  line-height:1;
+}
+.transport-btn.pause-btn{
+  font:700 22px Arial,sans-serif;
+  letter-spacing:normal;
+}
+.control-key{
+  margin-top:12px;
+  padding:10px 12px;
+  border-radius:10px;
+  background:rgba(0,0,0,.15);
+  font-size:13px;
+  line-height:1.5;
+}
+.control-key-title{
+  font-weight:bold;
+  margin-bottom:3px;
+}
+@media(max-width:560px){
+  .transport-grid{grid-template-columns:repeat(3,64px);justify-content:center;}
+}
+
+
+#deviceGate{
+  position:fixed;
+  inset:0;
+  z-index:100;
+  display:flex;
+  align-items:flex-start;
+  justify-content:center;
+  padding:31px 20px 20px;
+  box-sizing:border-box;
+  background:#004CBF;
+}
+#deviceGate.hidden{display:none;}
+#deviceGateCard{
+  width:min(520px,100%);
+  padding:24px;
+  box-sizing:border-box;
+  border:5px solid #007DFF;
+  border-radius:10px;
+  background:#004CBF;
+}
+#deviceGateCard h2{margin:0 0 20px;font-size:24px;}
+#deviceGateCard p{display:none;}
+#deviceGateInput{height:47px;margin-top:8px;}
+#deviceGateStatus{min-height:18px;margin-top:10px;font-size:13px;font-weight:bold;}
+button:disabled,.transport-btn:disabled{cursor:default!important;pointer-events:none!important;filter:none!important;transform:none!important}
+button:disabled:hover,.transport-btn:disabled:hover{background:inherit!important;color:inherit!important}
+#nfhsControls button{
+  margin-top:10px;
+}
+#nfhsControls button:first-child{
+  margin-top:0;
+}
+#nfhsControls button:not(:disabled){
+  cursor:pointer;
+}
+#nfhsControls button:not(:disabled):hover{
+  background:#0093FF;
+  color:#fff;
+}
+#nfhsControls button:disabled{
+  opacity:.45;
+  cursor:default!important;
+  pointer-events:none!important;
+}
+#deviceIdView.online{color:#fff}
+#deviceIdView.offline{color:#fff}
+
+/* Browser Capture Sender: keep the full proven sender engine underneath,
+   but expose only the dedicated NFHS capture controls. */
+body #panel > .small,
+body #panel > .section{display:none!important;}
+body #panel > #sourceSection{display:block!important;border-top:0;margin-top:0;padding-top:0;}
+#sourceSection > label, #sourceSection > select, #sourceSection > input,
+#sourceSection > #loadFeed, #sourceSection > #targetLatency,
+#sourceSection > label[for="targetLatency"], #sourceSection > label[for="sourceUrl"]{display:none!important;}
+#nfhsControls{display:block!important;margin-top:0!important;}
+#nfhsControls button{display:block!important;}
+#nfhsControls .small{display:none!important;}
+#status{display:block;margin-top:14px;}
+</style>
+</head>
+<body>
+<div id="panel">
+  <h1>TJK NETWORK NFHS / BROWSER CAPTURE SENDER:</h1>
+
+  <div class="small">
+    Unified TJK video control — NFHS browser capture, HLS / Hudl, YouTube WebRTC, and MP4. HLS / Hudl and MP4 keep their existing direct playback path. YouTube is played once in the separate YouTube Sender page and relayed by WebRTC to OBS + Staff.
+  </div>
+
+
+  <div class="section">
+    <label for="deviceIdInput">Device ID:</label>
+    <input id="deviceIdInput" type="text" autocomplete="off" spellcheck="false" placeholder="DEVICE ID">
+    <button id="setDeviceId" type="button" style="margin-top:12px;">SET DEVICE ID</button>
+    <div id="deviceIdView" class="code" style="margin-top:10px;">Not connected</div>
+  </div>
+
+  <div class="section" id="sourceSection">
+    <label for="sourceType">Source Type:</label>
+    <select id="sourceType">
+      <option value="off">OFF</option>
+      <option value="hls">HUDL FEED (HLS / M3U8)</option>
+      <option value="nfhs">NFHS / Browser Capture (WebRTC)</option>
+      <option value="youtube">YouTube (WebRTC)</option>
+      <option value="mp4">Direct MP4</option>
+    </select>
+
+    <label for="sourceUrl">Stream / Video URL:</label>
+    <input id="sourceUrl" placeholder="Enter Link">
+
+    <label for="targetLatency">Target Latency (Seconds):</label>
+    <input id="targetLatency" type="number" min="0" max="30" step="0.25" value="3">
+
+    <button id="loadFeed" type="button" style="margin-top:12px;">LOAD / CHANGE FEED</button>
+    <div id="nfhsControls" style="display:none;margin-top:12px;">
+      <button id="startCapture" type="button">CAPTURE NFHS TAB / WINDOW</button>
+      <button id="sendObs" type="button" disabled>SEND / SYNC TO OBS</button>
+      <button id="stopCapture" type="button" disabled>STOP CAPTURE</button>
+      <div class="small" style="margin-top:10px;">Brave will show its normal capture chooser. Select the NFHS tab/window. Capture is sent at up to 1920×1080, 30 FPS, 5.5 Mbps WebRTC.</div>
+    </div>
+
+  </div>
+
+  <div class="section">
+    <div class="transport-grid" aria-label="Video playback controls">
+      <button id="play" class="transport-btn" type="button" title="Play" aria-label="Play">▶︎</button>
+      <button id="pause" class="transport-btn pause-btn" type="button" title="Pause" aria-label="Pause">Ⅱ</button>
+      <button id="goLive" class="transport-btn" type="button" title="Go Live" aria-label="Go Live">🔴</button>
+      <button id="sync" class="transport-btn" type="button" title="Sync" aria-label="Sync">🔄</button>
+      <button id="reload" class="transport-btn" type="button" title="Reload" aria-label="Reload">↻</button>
+      <button id="clear" class="transport-btn" type="button" title="Clear" aria-label="Clear">✕</button>
+    </div>
+
+    <div class="control-key">
+      <div class="control-key-title">Control Key:</div>
+      ▶︎ Play &nbsp;&nbsp; Ⅱ Pause &nbsp;&nbsp; 🔴 Go Live &nbsp;&nbsp; 🔄 Sync &nbsp;&nbsp; ↻ Reload &nbsp;&nbsp; ✕ Clear
+    </div>
+  </div>
+
+  <div class="section">
+    <label for="videoCrop">Video Crop:</label>
+    <select id="videoCrop">
+      <option value="default">Default</option>
+      <option value="normal-hudl">Normal HUDL Crop</option>
+      <option value="hudl-scoreboard">HUDL Scoreboard Crop</option>
+      <option value="nfhs-network">NFHS Network</option>
+      <option value="nfhs-scoreboard">NFHS Network Scoreboard Crop</option>
+      <option value="gamechanger">Gamechanger</option>
+      <option value="stretch">Stretch</option>
+    </select>
+  </div>
+
+  <div class="section">
+    <label>NFHS Capture Status:</label>
+    <div id="captureView" class="code">Inactive</div>
+  </div>
+
+  <div class="section">
+    <label>Current Shared State:</label>
+    <div id="stateView" class="code">Waiting…</div>
+  </div>
+
+  <div id="status"></div>
+</div>
+
+<div id="deviceGate" class="hidden">
+  <div id="deviceGateCard">
+    <h2>TJK NETWORK NFHS / BROWSER CAPTURE SENDER:</h2>
+    <label for="deviceGateInput">Device ID:</label>
+    <input id="deviceGateInput" type="text" autocomplete="off" spellcheck="false" placeholder="Enter Device ID">
+    <button id="deviceGateConnect" type="button" style="margin-top:14px;">Set Device ID</button>
+    <div id="deviceGateStatus"></div>
+  </div>
+</div>
+
+<script>
+"use strict";
+
+const FIREBASE_PRIMARY="https://tjk-network-controls-default-rtdb.firebaseio.com";
+const FIREBASE_BACKUP="https://tjk-network-controls-backup-default-rtdb.firebaseio.com";
+let FIREBASE_BASE=FIREBASE_PRIMARY;
+let tjkFirebaseSelectionPromise=null;
+let tjkFirebaseStreamHealthy=false;
+let tjkFirebaseFallbackTimer=null;
+const TJK_FIREBASE_FALLBACK_POLL_MS=500;
+
+function tjkFirebaseTranslateUrl(url,base){
+  const s=String(url||"");
+  if(s.startsWith(FIREBASE_PRIMARY))return base+s.slice(FIREBASE_PRIMARY.length);
+  if(s.startsWith(FIREBASE_BACKUP))return base+s.slice(FIREBASE_BACKUP.length);
+  return s;
+}
+async function tjkFirebaseFetch(url,options={}){
+  const activeUrl=tjkFirebaseTranslateUrl(url,FIREBASE_BASE);
+  try{
+    const r=await fetch(activeUrl,{...options,cache:"no-store"});
+    if(!r.ok){
+      const body=await r.text().catch(()=>"");
+      const e=new Error(`Firebase ${options.method||"GET"} ${r.status}${body?" — "+body.slice(0,180):""}`);
+      e.status=r.status;
+      throw e;
+    }
+    return r;
+  }catch(primaryError){
+    if(FIREBASE_BASE!==FIREBASE_PRIMARY)throw primaryError;
+    const backupUrl=tjkFirebaseTranslateUrl(url,FIREBASE_BACKUP);
+    const r=await fetch(backupUrl,{...options,cache:"no-store"});
+    if(!r.ok){
+      const body=await r.text().catch(()=>"");
+      const e=new Error(`Backup Firebase ${options.method||"GET"} ${r.status}${body?" — "+body.slice(0,180):""}`);
+      e.status=r.status;
+      throw e;
+    }
+    FIREBASE_BASE=FIREBASE_BACKUP;
+    tjkFirebaseStreamHealthy=false;
+    setTimeout(()=>{
+      try{
+        if(typeof openFirebaseStream==="function")openFirebaseStream();
+        else if(typeof openStream==="function")openStream();
+      }catch(_){}
+    },0);
+    return r;
+  }
+}
+async function tjkFirebaseProbe(base){
+  const r=await fetch(base+"/.json?shallow=true",{method:"GET",cache:"no-store"});
+  if(!r.ok)throw new Error(`Firebase probe ${r.status}`);
+  return true;
+}
+async function tjkSelectFirebaseServer(){
+  if(FIREBASE_BASE===FIREBASE_BACKUP)return FIREBASE_BASE;
+  if(tjkFirebaseSelectionPromise)return tjkFirebaseSelectionPromise;
+  tjkFirebaseSelectionPromise=(async()=>{
+    try{
+      await tjkFirebaseProbe(FIREBASE_PRIMARY);
+      FIREBASE_BASE=FIREBASE_PRIMARY;
+    }catch(_){
+      await tjkFirebaseProbe(FIREBASE_BACKUP);
+      FIREBASE_BASE=FIREBASE_BACKUP;
+    }
+    return FIREBASE_BASE;
+  })();
+  try{return await tjkFirebaseSelectionPromise}
+  finally{tjkFirebaseSelectionPromise=null}
+}
+async function fbGet(url){
+  const r=await tjkFirebaseFetch(url,{method:"GET"});
+  return r.json().catch(()=>null);
+}
+// YouTube playback is hosted on the HTTPS OBS/staff player pages so the IFrame API receives a valid Referer.
+const DEVICE_ID_STORAGE_KEY="tjk-video-production-device-id";
+function isHostedVideoControls(){
+  /*
+  Only a true local file:// launch is treated as a fresh local session.
+  Wix can run/recreate embedded code under HTTPS, about:, blob:, or another
+  inherited-origin document. Those must all use the hosted login behavior.
+  */
+  try{return location.protocol!=="file:"}
+  catch(_){return true}
+}
+
+function readSessionDeviceFromHash(){
+  try{
+    const m=String(location.hash||"").match(/(?:^#|[&#])tjkDevice=([^&]+)/);
+    return m?cleanDeviceId(decodeURIComponent(m[1])):"";
+  }catch(_){return ""}
+}
+function writeSessionDeviceToHash(id){
+  if(!isHostedVideoControls()||!id)return;
+  try{
+    const value="#tjkDevice="+encodeURIComponent(id);
+    if(location.hash!==value)history.replaceState(null,"",location.pathname+location.search+value);
+  }catch(_){}
+}
+
+const CONTROL_PRESENCE_INTERVAL_MS=10000;
+const CONTROL_PRESENCE_SESSION_ID="controls-"+Date.now().toString(36)+"-"+Math.random().toString(36).slice(2,9);
+
+const VIDEO_WIDTH=1920;
+const VIDEO_HEIGHT=1080;
+const VIDEO_FPS=30;
+const VIDEO_MAX_BITRATE=5500000;
+
+const sourceType=document.getElementById("sourceType");
+const sourceUrl=document.getElementById("sourceUrl");
+const targetLatency=document.getElementById("targetLatency");
+const videoCrop=document.getElementById("videoCrop");
+const goLiveBtn=document.getElementById("goLive");
+const status=document.getElementById("status");
+const stateView=document.getElementById("stateView");
+const deviceIdView=document.getElementById("deviceIdView");
+const deviceIdInput=document.getElementById("deviceIdInput");
+const setDeviceIdBtn=document.getElementById("setDeviceId");
+const deviceGate=document.getElementById("deviceGate");
+const deviceGateInput=document.getElementById("deviceGateInput");
+const deviceGateConnect=document.getElementById("deviceGateConnect");
+const deviceGateStatus=document.getElementById("deviceGateStatus");
+const nfhsControls=document.getElementById("nfhsControls");
+const captureView=document.getElementById("captureView");
+const loadFeedBtn=document.getElementById("loadFeed");
+const startCaptureBtn=document.getElementById("startCapture");
+const sendObsBtn=document.getElementById("sendObs");
+const stopCaptureBtn=document.getElementById("stopCapture");
+
+let productionDeviceId="";
+let state={
+  sourceType:"off",
+  sourceUrl:"",
+  sourceId:"",
+  sourceRevision:0,
+  playing:false,
+  targetLatencySeconds:3,
+  videoCrop:"default",
+  command:"",
+  commandId:"",
+  updatedAt:0
+};
+
+let captureStream=null;
+let pc=null;
+let sessionId=null;
+let firebaseStream=null;
+let firebaseView={};
+let firebaseConnected=false;
+let controlPresenceTimer=null;
+
+/*
+Staff viewers use their own RTCPeerConnection so each viewer may request
+a different quality without affecting the OBS connection.
+*/
+const staffPeers=new Map();
+const staffRequestSignatures=new Map();
+
+function setStatus(msg){status.textContent=msg}
+function youtubeSenderOnline(){
+  const p=firebaseView&&firebaseView.youtubeSenderPresence;
+  return !!(p&&p.online===true&&Date.now()-Number(p.lastSeen||0)<45000);
+}
+function renderDeviceStatus(){
+  if(!productionDeviceId){
+    deviceIdView.textContent="🔴 OFFLINE";
+    deviceIdView.className="code offline";
+    return;
+  }
+  deviceIdView.textContent=firebaseConnected
+    ? `🟢 ${productionDeviceId} CONNECTED`
+    : `🔴 ${productionDeviceId} OFFLINE`;
+  deviceIdView.className="code "+(firebaseConnected?"online":"offline");
+}
+function cleanDeviceId(v){return String(v||"").trim().replace(/[.#$\[\]\/]/g,"_")}
+function basePath(suffix){return `${FIREBASE_BASE}/devices/${encodeURIComponent(productionDeviceId)}/videoUnified/${suffix}.json`}
+function rawPath(suffix){return `${FIREBASE_BASE}/devices/${encodeURIComponent(productionDeviceId)}/videoUnified/raw/${suffix}.json`}
+function staffSyncPath(){return `${FIREBASE_BASE}/devices/${encodeURIComponent(productionDeviceId)}/videoUnified/staff/syncRequest.json`}
+function staffClientPath(clientId,suffix){
+  return `${FIREBASE_BASE}/devices/${encodeURIComponent(productionDeviceId)}/videoUnified/staff/clients/${encodeURIComponent(clientId)}/${suffix}.json`;
+}
+
+function controlPresencePath(){
+  return `${FIREBASE_BASE}/devices/${encodeURIComponent(productionDeviceId)}/videoUnified/controlPresence.json`;
+}
+
+async function publishControlPresence(online=true){
+  if(!productionDeviceId)return;
+  try{
+    await fbPut(controlPresencePath(),{
+      online:!!online,
+      deviceId:productionDeviceId,
+      sessionId:CONTROL_PRESENCE_SESSION_ID,
+      lastSeen:Date.now(),
+      page:"video-controls"
+    });
+  }catch(err){
+    console.warn("Video controls presence:",err);
+  }
+}
+
+function startControlPresence(){
+  if(controlPresenceTimer){
+    clearInterval(controlPresenceTimer);
+    controlPresenceTimer=null;
+  }
+  if(!productionDeviceId)return;
+  publishControlPresence(true);
+  controlPresenceTimer=setInterval(
+    ()=>publishControlPresence(true),
+    CONTROL_PRESENCE_INTERVAL_MS
+  );
+}
+
+function readDeviceIdFromUrl(){
+  try{
+    const q=new URLSearchParams(location.search||"");
+    return cleanDeviceId(q.get("device")||q.get("deviceId")||"");
+  }catch(_){
+    return "";
+  }
+}
+
+async function fbPut(url,value){
+  const r=await tjkFirebaseFetch(url,{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(value)});
+  return r.json().catch(()=>null);
+}
+async function fbDelete(url){
+  await tjkFirebaseFetch(url,{method:"DELETE"});
+}
+
+function streamPath(){
+  return `${FIREBASE_BASE}/devices/${encodeURIComponent(productionDeviceId)}/videoUnified.json`;
+}
+
+function setNestedValue(root,path,data,isPatch){
+  const parts=String(path||"/").split("/").filter(Boolean);
+
+  if(!parts.length){
+    if(isPatch && root && typeof root==="object" && data && typeof data==="object"){
+      Object.assign(root,data);
+      return root;
+    }
+    return data && typeof data==="object" ? data : {};
+  }
+
+  let target=root;
+  for(let i=0;i<parts.length-1;i++){
+    const key=parts[i];
+    if(!target[key] || typeof target[key]!=="object")target[key]={};
+    target=target[key];
+  }
+
+  const last=parts[parts.length-1];
+
+  if(isPatch && target[last] && typeof target[last]==="object" && data && typeof data==="object"){
+    Object.assign(target[last],data);
+  }else if(data===null){
+    delete target[last];
+  }else{
+    target[last]=data;
+  }
+
+  return root;
+}
+
+function updateCaptureSenderButtons(){
+  const enabled=!!(productionDeviceId && state && state.sourceType==="nfhs");
+  startCaptureBtn.disabled=!enabled;
+  sendObsBtn.disabled=!(enabled && captureStream);
+  stopCaptureBtn.disabled=!(enabled && captureStream);
+  if(!enabled){
+    captureView.textContent="Inactive — select NFHS / Browser Capture in Video Controls.";
+  }else if(!captureStream){
+    captureView.textContent="Ready — capture the NFHS tab/window.";
+  }
+}
+
+function processFirebaseSnapshot(){
+  const next=firebaseView && firebaseView.state;
+  if(next && typeof next==="object"){
+    const raw=JSON.stringify(next);
+    if(raw!==JSON.stringify(state)){
+      state=next;
+      renderState();
+    }
+  }
+
+  const answer=firebaseView && firebaseView.raw && firebaseView.raw.answer;
+  if(
+    answer &&
+    pc &&
+    sessionId &&
+    answer.sessionId===sessionId &&
+    answer.description &&
+    !pc.remoteDescription
+  ){
+    pc.setRemoteDescription(answer.description)
+      .then(async()=>{
+        const sender=pc && pc.getSenders().find(s=>s.track&&s.track.kind==="video");
+        if(sender)await tuneVideoSender(sender);
+        captureView.textContent="OBS answer received — connecting…";
+      })
+      .catch(err=>console.warn("Remote answer:",err));
+  }
+
+  processStaffRequests().catch(err=>console.warn("Staff request processing:",err));
+  renderDeviceStatus();
+  updateSourceUi();
+  updateCaptureSenderButtons();
+  if((!state || state.sourceType!=="nfhs") && (captureStream || pc)){
+    stopRawSession(true).catch(()=>{});
+  }
+}
+
+async function openFirebaseStream(){
+  if(firebaseStream){try{firebaseStream.close()}catch(_){}firebaseStream=null}
+  if(!productionDeviceId)return;
+  tjkFirebaseStreamHealthy=false;
+  try{await tjkSelectFirebaseServer()}
+  catch(err){firebaseConnected=false;renderDeviceStatus();setStatus("Firebase unavailable.");startFirebaseFallbackPolling();return}
+
+  firebaseStream=new EventSource(streamPath());
+
+  const handle=(ev,isPatch)=>{
+    try{
+      const msg=JSON.parse(ev.data||"{}");
+      firebaseView=setNestedValue(firebaseView,msg.path,msg.data,isPatch);
+      processFirebaseSnapshot();
+    }catch(err){
+      console.warn("Firebase stream event:",err);
+    }
+  };
+
+  firebaseStream.addEventListener("put",ev=>handle(ev,false));
+  firebaseStream.addEventListener("patch",ev=>handle(ev,true));
+  firebaseStream.onopen=()=>{
+    tjkFirebaseStreamHealthy=true;stopFirebaseFallbackPolling();
+    firebaseConnected=true;renderDeviceStatus();
+    setStatus(FIREBASE_BASE===FIREBASE_BACKUP?"Firebase connected — BACKUP SERVER":"Firebase realtime connection active.");
+  };
+  firebaseStream.onerror=()=>{
+    tjkFirebaseStreamHealthy=false;firebaseConnected=false;renderDeviceStatus();
+    startFirebaseFallbackPolling();setStatus("Firebase realtime connection reconnecting…");
+  };
+}
+function stopFirebaseFallbackPolling(){
+  if(tjkFirebaseFallbackTimer){clearInterval(tjkFirebaseFallbackTimer);tjkFirebaseFallbackTimer=null}
+}
+function startFirebaseFallbackPolling(){
+  if(tjkFirebaseFallbackTimer||!productionDeviceId)return;
+  const poll=async()=>{
+    if(tjkFirebaseStreamHealthy){stopFirebaseFallbackPolling();return}
+    try{
+      const data=await fbGet(streamPath());
+      if(data&&typeof data==="object"){firebaseView=data;firebaseConnected=true;processFirebaseSnapshot();renderDeviceStatus()}
+    }catch(_){}
+  };
+  poll();tjkFirebaseFallbackTimer=setInterval(poll,TJK_FIREBASE_FALLBACK_POLL_MS);
+}
+
+function detectSourceType(url,currentType){
+  const s=String(url||"").trim();
+  try{
+    const u=new URL(s);
+    const host=u.hostname.toLowerCase();
+    if(host.includes("youtube.com")||host.includes("youtu.be"))return "youtube";
+    const path=u.pathname.toLowerCase();
+    if(path.includes(".m3u8"))return "hls";
+    if(path.includes(".mp4"))return "mp4";
+  }catch(e){}
+  return currentType||"off";
+}
+
+function parseYouTubeId(input){
+  const s=String(input||"").trim();
+  if(/^[a-zA-Z0-9_-]{11}$/.test(s))return s;
+  try{
+    const u=new URL(s);
+    if(u.hostname.includes("youtu.be"))return u.pathname.split("/").filter(Boolean)[0]||"";
+    if(u.searchParams.get("v"))return u.searchParams.get("v")||"";
+    const p=u.pathname.split("/").filter(Boolean);
+    const ix=p.findIndex(x=>["embed","live","shorts"].includes(x));
+    if(ix>=0&&p[ix+1])return p[ix+1];
+  }catch(e){}
+  return "";
+}
+
+function renderState(){
+  sourceType.value=state.sourceType||"off";
+  sourceUrl.value=state.sourceUrl||"";
+  videoCrop.value=state.videoCrop||"default";
+  const runtime=firebaseView&&firebaseView.runtime;
+  const capabilityMatches=runtime&&Number(runtime.sourceRevision||0)===Number(state.sourceRevision||0);
+  const vod=capabilityMatches && runtime.mediaKind==="vod";
+  const liveWithoutDvr=capabilityMatches &&
+    runtime.mediaKind==="live" &&
+    sourceType.value!=="youtube" &&
+    (runtime.dvrAvailable===false || runtime.delaySupported===false);
+  const noConfigurableDelay=vod || liveWithoutDvr;
+  // Keep the operator-entered latency sticky. Firebase/runtime updates happen
+  // constantly and must not overwrite the field after LOAD.
+  const stateDelay=Number(state.targetLatencySeconds);
+  if(document.activeElement!==targetLatency && !targetLatency.dataset.dirty){
+    targetLatency.value=Number.isFinite(stateDelay)?stateDelay:3;
+  }
+  stateView.textContent=
+    "Type: "+(state.sourceType||"none")+
+    "\nPlaying: "+(!!state.playing)+
+    "\nTarget Latency: "+(Number.isFinite(Number(state.targetLatencySeconds))?Number(state.targetLatencySeconds):3)+"s"+
+    "\nVideo Crop: "+(state.videoCrop||"default")+
+    "\nCommand: "+(state.command||"none")+
+    "\nUpdated: "+(state.updatedAt?new Date(state.updatedAt).toLocaleTimeString():"--");
+  updateSourceUi();
+}
+
+function updateSourceUi(){
+  const off=sourceType.value==="off";
+  const nfhs=sourceType.value==="nfhs";
+  const hls=sourceType.value==="hls";
+  const youtube=sourceType.value==="youtube";
+  const runtime=firebaseView&&firebaseView.runtime;
+  const capabilityMatches=runtime&&Number(runtime.sourceRevision||0)===Number(state.sourceRevision||0);
+  const vod=capabilityMatches && runtime.mediaKind==="vod";
+  const liveWithoutDvr=capabilityMatches &&
+    runtime.mediaKind==="live" &&
+    sourceType.value!=="youtube" &&
+    (runtime.dvrAvailable===false || runtime.delaySupported===false);
+  const noConfigurableDelay=vod || liveWithoutDvr;
+  const syncBtn=document.getElementById("sync");
+  const transportIds=["play","pause","goLive","sync","reload"];
+  const youtubeConfirmedNoDelay = youtube && capabilityMatches &&
+    runtime.mediaKind==="vod";
+
+  nfhsControls.style.display="block";
+  if(nfhs && sourceUrl.value!=="")sourceUrl.value="";
+  sourceUrl.disabled=off||nfhs;
+  sourceUrl.style.opacity=(off||nfhs)?".55":"1";
+  loadFeedBtn.style.display=nfhs?"none":"block";
+  loadFeedBtn.disabled=off;
+
+  targetLatency.disabled=off||nfhs||noConfigurableDelay||youtubeConfirmedNoDelay;
+  targetLatency.style.opacity=targetLatency.disabled?".55":"1";
+
+  if(youtubeConfirmedNoDelay && String(targetLatency.value)!=="0"){
+    targetLatency.value="0";
+    targetLatency.dataset.dirty="";
+    if(Number(state.targetLatencySeconds)!==0){
+      const now=Date.now();
+      const next={...state,targetLatencySeconds:0,command:"delay",commandId:"cmd-"+now,updatedAt:now};
+      state=next;
+      fbPut(basePath("state"),next).catch(()=>{});
+    }
+  }
+
+  goLiveBtn.disabled=off||nfhs||vod;
+  goLiveBtn.style.opacity=goLiveBtn.disabled?".55":"1";
+
+  // SYNC is HUDL-only.
+  syncBtn.disabled=!hls;
+  syncBtn.style.opacity=syncBtn.disabled?".55":"1";
+
+  for(const id of transportIds){
+    const b=document.getElementById(id);
+    if(!b)continue;
+    if(id==="goLive"||id==="sync")continue;
+    b.disabled=off||nfhs;
+    b.style.opacity=b.disabled?".55":"1";
+  }
+}
+async function publishState(next){
+  if(!productionDeviceId){
+    setStatus("Enter a Device ID first.");
+    return false;
+  }
+  state=next;
+  await fbPut(basePath("state"),next);
+  renderState();
+  return true;
+}
+
+async function loadFeed(){
+  if(!productionDeviceId){setStatus("Enter a Device ID first.");return}
+  if(sourceType.value==="off"){setStatus("Select a source type first.");return}
+  const url=sourceUrl.value.trim();
+  if(!url){setStatus("Enter a stream/video URL.");return}
+  const type=detectSourceType(url,sourceType.value);
+  sourceType.value=type;
+  const sourceId=type==="youtube"?parseYouTubeId(url):"";
+  if(type==="youtube"&&!sourceId){setStatus("Could not read a YouTube video ID from that URL.");return}
+
+  // Snapshot the operator's requested delay immediately. stopRawSession() and
+  // realtime Firebase events may re-render the panel while LOAD is in flight;
+  // they must not be allowed to replace the entered value with a transient 0.
+  const requestedDelay=Math.max(0,Number(targetLatency.value)||0);
+
+  await stopRawSession(false);
+  const now=Date.now();
+  const next={
+    sourceType:type,sourceUrl:url,sourceId,sourceRevision:now,
+    playing:true,targetLatencySeconds:requestedDelay,
+    videoCrop:videoCrop.value||"default",
+    command:"golive",commandId:"cmd-"+now,updatedAt:now
+  };
+  if(await publishState(next)){
+    targetLatency.dataset.dirty="";
+    targetLatency.value=requestedDelay;
+    setStatus("Feed sent to OBS player through Device ID.");
+  }
+}
+
+async function sendCommand(command){
+  if(sourceType.value==="nfhs"){
+    setStatus("NFHS capture is a live browser capture; playback transport controls do not apply.");
+    return;
+  }
+  if(sourceType.value==="youtube" && command==="sync"){
+    setStatus("YouTube WebRTC uses one shared sender timeline; SYNC is not needed.");
+    return;
+  }
+  const now=Date.now();
+  const next={...state,command,commandId:"cmd-"+now,updatedAt:now};
+  if(command==="golive"||command==="reload"){
+    next.targetLatencySeconds=Math.max(0,Number(targetLatency.value)||0);
+  }else if(sourceType.value==="youtube"){
+    next.targetLatencySeconds=Math.max(0,Number(targetLatency.value)||0);
+  }
+  if(command==="play"||command==="golive"||command==="reload")next.playing=true;
+  if(command==="pause")next.playing=false;
+  if(await publishState(next))setStatus(command.toUpperCase()+" sent.");
+}
+
+async function clearFeed(){
+  await stopRawSession(false);
+  const now=Date.now();
+  const next={
+    sourceType:"off",sourceUrl:"",sourceId:"",sourceRevision:now,playing:false,
+    targetLatencySeconds:Math.max(0,Number(targetLatency.value)||0),
+    videoCrop:videoCrop.value||state.videoCrop||"default",
+    command:"clear",commandId:"cmd-"+now,updatedAt:now
+  };
+  if(await publishState(next)){
+    sourceType.value="off";
+    sourceUrl.value="";
+    updateSourceUi();
+    setStatus("Feed cleared. System set to OFF.");
+  }
+}
+
+async function setProductionDeviceId(value,{closeGate=true}={}){
+  const id=cleanDeviceId(value);
+  if(!id){
+    if(deviceGateStatus)deviceGateStatus.textContent="Enter a valid Device ID.";
+    return false;
+  }
+
+  if(controlPresenceTimer){
+    clearInterval(controlPresenceTimer);
+    controlPresenceTimer=null;
+  }
+
+  if(firebaseStream){
+    try{firebaseStream.close()}catch(_){}
+    firebaseStream=null;
+  }
+
+  productionDeviceId=id;
+  firebaseConnected=false;
+
+  // Hosted/Wix only: remember the ID for this browser-tab session so a Wix
+  // iframe re-initialization does not ask a second time. Local file:// pages
+  // intentionally never persist the Device ID.
+  if(isHostedVideoControls()){
+    // Match the proven Online Config behavior: hosted/Wix stores the selected
+    // Device ID in localStorage before starting Firebase. This survives Wix
+    // rebuilding/reloading the embedded document.
+    try{sessionStorage.setItem(DEVICE_ID_STORAGE_KEY,id)}catch(_){}
+  }
+  
+  renderDeviceStatus();
+  deviceIdInput.value=id;
+  deviceGateInput.value=id;
+  firebaseView={};
+
+  try{
+    openFirebaseStream();
+    startControlPresence();
+    setStatus("Connected through Device ID "+id+".");
+  }catch(err){
+    console.error("Device ID connection:",err);
+    setStatus("Device ID connection failed: "+err.message);
+    if(deviceGateStatus)deviceGateStatus.textContent="Connection failed: "+err.message;
+    return false;
+  }
+
+  if(closeGate)deviceGate.classList.add("hidden");
+  if(deviceGateStatus)deviceGateStatus.textContent="";
+  return true;
+}
+
+async function linkDeviceIdFile(){
+  try{
+    let file=null;
+    if("showOpenFilePicker" in window){
+      const [handle]=await window.showOpenFilePicker({
+        multiple:false,
+        types:[{description:"Text files",accept:{"text/plain":[".txt"]}}]
+      });
+      file=await handle.getFile();
+    }else{
+      file=await new Promise(resolve=>{
+        const input=document.createElement("input");
+        input.type="file";input.accept=".txt,text/plain";
+        input.onchange=()=>resolve(input.files&&input.files[0]||null);
+        input.click();
+      });
+    }
+    if(!file)return;
+    const id=cleanDeviceId(await file.text());
+    if(!id){alert("The selected file is blank.");return}
+    productionDeviceId=id;
+    
+    renderDeviceStatus();
+    setStatus("Device ID linked.");
+    openFirebaseStream();
+    startControlPresence();
+  }catch(err){
+    if(err&&err.name==="AbortError")return;
+    console.error(err);
+    alert("Could not read device-id.txt.");
+  }
+}
+
+function waitIceComplete(peer,timeoutMs=4000){
+  if(peer.iceGatheringState==="complete")return Promise.resolve();
+  return new Promise(resolve=>{
+    let done=false;
+    const finish=()=>{if(done)return;done=true;peer.removeEventListener("icegatheringstatechange",check);resolve()};
+    const check=()=>{if(peer.iceGatheringState==="complete")finish()};
+    peer.addEventListener("icegatheringstatechange",check);
+    setTimeout(finish,timeoutMs);
+  });
+}
+
+async function tuneCapturedVideoTrack(stream){
+  const track=stream&&stream.getVideoTracks()[0];
+  if(!track)return;
+  try{track.contentHint="motion"}catch(_){}
+  try{
+    await track.applyConstraints({
+      width:{ideal:VIDEO_WIDTH,max:VIDEO_WIDTH},
+      height:{ideal:VIDEO_HEIGHT,max:VIDEO_HEIGHT},
+      frameRate:{ideal:VIDEO_FPS,max:VIDEO_FPS}
+    });
+  }catch(err){console.warn("Capture constraints:",err)}
+}
+
+function preferH264ForTransceiver(transceiver){
+  if(!transceiver||typeof transceiver.setCodecPreferences!=="function")return;
+  try{
+    const caps=RTCRtpSender.getCapabilities&&RTCRtpSender.getCapabilities("video");
+    if(!caps||!Array.isArray(caps.codecs))return;
+    const h264=caps.codecs.filter(c=>String(c.mimeType||"").toLowerCase()==="video/h264");
+    const rest=caps.codecs.filter(c=>String(c.mimeType||"").toLowerCase()!=="video/h264");
+    if(h264.length)transceiver.setCodecPreferences([...h264,...rest]);
+  }catch(e){}
+}
+
+async function tuneVideoSender(sender){
+  if(!sender||!sender.track||sender.track.kind!=="video")return;
+  try{
+    const p=sender.getParameters();
+    if(!p.encodings||!p.encodings.length)p.encodings=[{}];
+    for(const e of p.encodings){
+      e.maxBitrate=VIDEO_MAX_BITRATE;
+      e.maxFramerate=VIDEO_FPS;
+      e.scaleResolutionDownBy=1.0;
+      try{e.priority="high"}catch(_){}
+      try{e.networkPriority="high"}catch(_){}
+    }
+    p.degradationPreference="maintain-framerate";
+    await sender.setParameters(p);
+  }catch(err){console.warn("Sender tuning:",err)}
+}
+
+
+const STAFF_QUALITY_PROFILES={
+  // Auto may adapt both picture size and bitrate, up to 1080p30 / 5 Mbps.
+  "auto":{
+    width:1920,height:1080,fps:30,maxBitrate:5000000,scale:1,auto:true
+  },
+  // Manual choices lock the requested output resolution. WebRTC may adapt
+  // bitrate below the ceiling, but maintain-resolution prevents normal
+  // congestion control from silently stepping down to a lower resolution.
+  "1080":{
+    width:1920,height:1080,fps:30,maxBitrate:5000000,scale:1
+  },
+  "720":{
+    width:1280,height:720,fps:30,maxBitrate:3000000,scale:1.5
+  },
+  "540":{
+    width:960,height:540,fps:30,maxBitrate:2000000,scale:2
+  },
+  "480":{
+    width:854,height:480,fps:30,maxBitrate:1500000,scale:2.25
+  },
+  "360":{
+    width:640,height:360,fps:30,maxBitrate:1000000,scale:3
+  }
+};
+
+function getStaffQualityProfile(key){
+  return STAFF_QUALITY_PROFILES[String(key||"auto")] || STAFF_QUALITY_PROFILES["auto"];
+}
+
+async function tuneStaffVideoSender(sender,qualityKey){
+  if(!sender||!sender.track||sender.track.kind!=="video")return;
+  const q=getStaffQualityProfile(qualityKey);
+  try{
+    const p=sender.getParameters();
+    if(!p.encodings||!p.encodings.length)p.encodings=[{}];
+    for(const e of p.encodings){
+      e.maxBitrate=q.maxBitrate;
+      e.maxFramerate=q.fps;
+      e.scaleResolutionDownBy=q.scale;
+      try{e.priority="low"}catch(_){}
+      try{e.networkPriority="low"}catch(_){}
+    }
+    p.degradationPreference=q.auto?"balanced":"maintain-resolution";
+    await sender.setParameters(p);
+  }catch(err){
+    console.warn("Staff sender tuning:",err);
+  }
+}
+
+function closeStaffPeer(clientId){
+  const peer=staffPeers.get(clientId);
+  if(peer){
+    // Staff peers use cloned MediaStreamTracks. Stopping those clones cannot
+    // stop or alter the original production capture track feeding OBS.
+    try{
+      for(const sender of peer.getSenders()){
+        if(sender&&sender.track)try{sender.track.stop()}catch(_){}
+      }
+    }catch(_){}
+    try{peer.close()}catch(_){}
+    staffPeers.delete(clientId);
+  }
+}
+
+async function answerStaffRequest(clientId,request){
+  if(!captureStream || !request || !request.offer)return;
+
+  closeStaffPeer(clientId);
+
+  const peer=new RTCPeerConnection({iceServers:[
+    {urls:"stun:stun.l.google.com:19302"},
+    {urls:"stun:stun1.l.google.com:19302"}
+  ]});
+  staffPeers.set(clientId,peer);
+
+  const quality=String(request.quality||"720");
+  const profile=getStaffQualityProfile(quality);
+
+  const staffStream=new MediaStream();
+  for(const sourceTrack of captureStream.getTracks()){
+    /*
+      HARD ISOLATION: every staff connection gets its own cloned tracks.
+      Staff resolution/bitrate changes are applied only to that peer's sender;
+      the original 1080p30 capture track and OBS RTCRtpSender are untouched.
+    */
+    const staffTrack=sourceTrack.clone();
+    if(staffTrack.kind==="video"){
+      try{staffTrack.contentHint="motion"}catch(_){}
+    }
+    staffStream.addTrack(staffTrack);
+    const sender=peer.addTrack(staffTrack,staffStream);
+    if(staffTrack.kind==="video"){
+      const transceiver=peer.getTransceivers().find(t=>t.sender===sender);
+      preferH264ForTransceiver(transceiver);
+      await tuneStaffVideoSender(sender,quality);
+    }
+  }
+
+  peer.onconnectionstatechange=()=>{
+    const st=peer.connectionState;
+    if(st==="failed"||st==="closed"){
+      closeStaffPeer(clientId);
+    }
+  };
+
+  await peer.setRemoteDescription(request.offer);
+  const answer=await peer.createAnswer();
+  await peer.setLocalDescription(answer);
+  await waitIceComplete(peer);
+
+  if(staffPeers.get(clientId)!==peer)return;
+
+  // Reassert the production OBS sender after any staff renegotiation. This is
+  // defensive only; staff now uses cloned tracks and separate sender settings.
+  if(pc){
+    for(const sender of pc.getSenders()){
+      if(sender&&sender.track&&sender.track.kind==="video")await tuneVideoSender(sender);
+    }
+  }
+
+  await fbPut(staffClientPath(clientId,"answer"),{
+    requestId:String(request.requestId||""),
+    createdAt:Date.now(),
+    description:peer.localDescription,
+    quality,
+    video:{
+      width:profile.width,
+      height:profile.height,
+      fps:profile.fps,
+      maxBitrate:profile.maxBitrate
+    }
+  });
+}
+
+async function processStaffRequests(){
+  const clients=
+    firebaseView &&
+    firebaseView.staff &&
+    firebaseView.staff.clients &&
+    typeof firebaseView.staff.clients==="object"
+      ? firebaseView.staff.clients
+      : {};
+
+  const activeIds=new Set(Object.keys(clients));
+
+  for(const clientId of Array.from(staffPeers.keys())){
+    if(!activeIds.has(clientId)){
+      closeStaffPeer(clientId);
+      staffRequestSignatures.delete(clientId);
+    }
+  }
+
+  for(const [clientId,node] of Object.entries(clients)){
+    const request=node && node.request;
+    if(!request || !request.offer || !request.requestId)continue;
+
+    const signature=String(request.requestId)+"|"+String(request.quality||"720");
+    if(staffRequestSignatures.get(clientId)===signature)continue;
+
+    staffRequestSignatures.set(clientId,signature);
+
+    try{
+      await answerStaffRequest(clientId,request);
+    }catch(err){
+      console.warn("Staff answer failed:",clientId,err);
+      if(staffRequestSignatures.get(clientId)===signature){
+        staffRequestSignatures.delete(clientId);
+      }
+      closeStaffPeer(clientId);
+    }
+  }
+}
+
+function closeAllStaffPeers(){
+  for(const clientId of Array.from(staffPeers.keys()))closeStaffPeer(clientId);
+  staffRequestSignatures.clear();
+}
+
+function teardownPeer(){
+  if(pc){try{pc.close()}catch(_){}pc=null}
+}
+
+async function startCapture(){
+  if(!productionDeviceId){setStatus("Enter a Device ID first.");return}
+  if(!state || state.sourceType!=="nfhs"){setStatus("NFHS / Browser Capture is not selected in Video Controls.");updateCaptureSenderButtons();return}
+  try{
+    captureView.textContent="Requesting 1080p30 capture…";
+    const stream=await navigator.mediaDevices.getDisplayMedia({
+      video:{
+        width:{ideal:VIDEO_WIDTH,max:VIDEO_WIDTH},
+        height:{ideal:VIDEO_HEIGHT,max:VIDEO_HEIGHT},
+        frameRate:{ideal:VIDEO_FPS,max:VIDEO_FPS}
+      },
+      audio:true
+    });
+    await tuneCapturedVideoTrack(stream);
+    if(captureStream){
+      closeAllStaffPeers();
+      captureStream.getTracks().forEach(t=>t.stop());
+    }
+    captureStream=stream;
+    const v=stream.getVideoTracks()[0];
+    const s=v&&v.getSettings?v.getSettings():{};
+    captureView.textContent=`Active ${s.width||"?"}×${s.height||"?"} @ ${s.frameRate?Math.round(s.frameRate):"?"}fps — ready for OBS + staff`;
+    updateCaptureSenderButtons();
+    stream.getTracks().forEach(track=>track.addEventListener("ended",()=>{if(captureStream===stream)stopRawSession(true)}));
+  }catch(err){
+    captureView.textContent="Capture cancelled / failed";
+    console.error(err);
+  }
+}
+
+async function sendRawToObs(){
+  if(!productionDeviceId){setStatus("Enter a Device ID first.");return}
+  if(!state || state.sourceType!=="nfhs"){setStatus("NFHS / Browser Capture is not selected in Video Controls.");updateCaptureSenderButtons();return}
+  if(!captureStream){setStatus("Capture the NFHS tab/window first.");return}
+  teardownPeer();
+
+  sessionId=`${Date.now()}-${Math.random().toString(36).slice(2,10)}`;
+  pc=new RTCPeerConnection({iceServers:[
+    {urls:"stun:stun.l.google.com:19302"},
+    {urls:"stun:stun1.l.google.com:19302"}
+  ]});
+
+  for(const track of captureStream.getTracks()){
+    const sender=pc.addTrack(track,captureStream);
+    if(track.kind==="video"){
+      const transceiver=pc.getTransceivers().find(t=>t.sender===sender);
+      preferH264ForTransceiver(transceiver);
+      await tuneVideoSender(sender);
+    }
+  }
+
+  pc.onconnectionstatechange=()=>{
+    if(pc)captureView.textContent=`NFHS WebRTC: ${pc.connectionState}`;
+  };
+
+  const offer=await pc.createOffer({offerToReceiveAudio:false,offerToReceiveVideo:false});
+  await pc.setLocalDescription(offer);
+  await waitIceComplete(pc);
+  await fbPut(rawPath("session"),{
+    id:sessionId,createdAt:Date.now(),offer:pc.localDescription,
+    video:{width:VIDEO_WIDTH,height:VIDEO_HEIGHT,fps:VIDEO_FPS,maxBitrate:VIDEO_MAX_BITRATE}
+  });
+
+  captureView.textContent="Waiting for OBS answer…";
+  // OBS answer arrives through the persistent Firebase realtime stream.
+  processFirebaseSnapshot();
+}
+
+async function stopRawSession(stopCaptureToo=true){
+  teardownPeer();
+  if(stopCaptureToo)closeAllStaffPeers();
+  if(productionDeviceId){
+    try{await fbDelete(rawPath("session"));await fbDelete(rawPath("answer"))}catch(_){}
+  }
+  if(stopCaptureToo&&captureStream){
+    captureStream.getTracks().forEach(t=>t.stop());
+    captureStream=null;
+    captureView.textContent="Inactive";
+    updateCaptureSenderButtons();
+  }
+}
+
+videoCrop.addEventListener("change",async()=>{
+  if(!productionDeviceId){setStatus("Enter a Device ID first.");return}
+  const now=Date.now();
+  const next={...state,videoCrop:videoCrop.value||"default",updatedAt:now};
+  if(await publishState(next))setStatus("OBS video crop updated.");
+});
+
+sourceType.addEventListener("change",()=>{
+  if(sourceType.value==="nfhs")sourceUrl.value="";
+  updateSourceUi();
+  if(sourceType.value==="off"){
+    sourceUrl.value="";
+    setStatus("System OFF — no feed selected.");
+  }
+});
+targetLatency.addEventListener("input",()=>{targetLatency.dataset.dirty="1"});
+targetLatency.addEventListener("change",async()=>{
+  if(sourceType.value!=="youtube")return;
+  const delay=Math.max(0,Number(targetLatency.value)||0);
+  const now=Date.now();
+  const next={...state,targetLatencySeconds:delay,command:"delay",
+    commandId:"cmd-"+now,updatedAt:now};
+  if(await publishState(next)){
+    targetLatency.dataset.dirty="";
+    targetLatency.value=delay;
+    setStatus("YouTube delay set to "+delay+" second"+(delay===1?"":"s")+".");
+  }
+});
+{
+  const legacyLinkDeviceFile=document.getElementById("linkDeviceFile");
+  if(legacyLinkDeviceFile)legacyLinkDeviceFile.onclick=linkDeviceIdFile;
+}
+document.getElementById("loadFeed").onclick=()=>loadFeed().catch(e=>setStatus("Error: "+e.message));
+async function waitForProductionCommand(commandId,timeoutMs=5000){
+  const started=Date.now();
+  while(Date.now()-started<timeoutMs){
+    const runtime=firebaseView&&firebaseView.runtime;
+    const current=firebaseView&&firebaseView.state;
+    if(runtime && current && String(current.commandId||"")===String(commandId) &&
+       Number(runtime.sourceRevision||0)===Number(current.sourceRevision||0)){
+      if(runtime.delayWaiting!==true && runtime.delayReady!==false)return true;
+    }
+    await new Promise(r=>setTimeout(r,50));
+  }
+  return false;
+}
+const ADMIN_STAFF_SETTLE_MS=900;
+async function waitForAdminStaffSettle(extraMs=ADMIN_STAFF_SETTLE_MS){
+  await new Promise(r=>setTimeout(r,Math.max(0,Number(extraMs)||0)));
+}
+async function sendTransportAndSync(command){
+  await sendCommand(command);
+  const commandId=String(state.commandId||"");
+  await waitForProductionCommand(commandId);
+  // OBS is authoritative. Give the player/bridge a deliberate settling window
+  // before staff begins its multi-pass convergence routine.
+  await waitForAdminStaffSettle();
+  await requestStaffViewerSync("transport-"+command);
+}
+document.getElementById("play").onclick=()=>sendCommand("play");
+document.getElementById("pause").onclick=()=>sourceType.value==="youtube"?sendCommand("pause"):sendTransportAndSync("pause");
+document.getElementById("goLive").onclick=async()=>{
+  await sendCommand("golive");
+  if(sourceType.value==="youtube")return;
+  const commandId=String(state.commandId||"");
+  await waitForProductionCommand(commandId,8000);
+  await waitForAdminStaffSettle(1100);
+  await requestStaffViewerSync("golive");
+};
+document.getElementById("sync").onclick=()=>{if(sourceType.value!=="youtube")requestStaffViewerSync()};
+document.getElementById("reload").onclick=async()=>{
+  await sendCommand("reload");
+  if(sourceType.value==="youtube")return;
+  const commandId=String(state.commandId||"");
+  await waitForProductionCommand(commandId,8000);
+  await waitForAdminStaffSettle(1400);
+  await requestStaffViewerSync("reload");
+};
+document.getElementById("clear").onclick=()=>clearFeed().catch(e=>setStatus("Error: "+e.message));
+updateCaptureSenderButtons();
+startCaptureBtn.onclick=startCapture;
+sendObsBtn.onclick=()=>sendRawToObs().catch(e=>{console.error(e);captureView.textContent="Error: "+e.message});
+stopCaptureBtn.onclick=()=>stopRawSession(true);
+
+setDeviceIdBtn.addEventListener("click",()=>{
+  setProductionDeviceId(deviceIdInput.value,{closeGate:false});
+});
+deviceIdInput.addEventListener("keydown",event=>{
+  if(event.key==="Enter")setProductionDeviceId(deviceIdInput.value,{closeGate:false});
+});
+
+deviceGateConnect.addEventListener("click",()=>{
+  setProductionDeviceId(deviceGateInput.value,{closeGate:true});
+});
+deviceGateInput.addEventListener("keydown",event=>{
+  if(event.key==="Enter")setProductionDeviceId(deviceGateInput.value,{closeGate:true});
+});
+
+(async function init(){
+  const linkedDeviceId=readDeviceIdFromUrl();
+  let hostedStoredId="";
+
+  // Match Online Config exactly in principle:
+  // hosted/Wix reads its Device ID from localStorage before deciding whether
+  // the login gate is needed. Local file:// never reads or writes this value.
+  if(isHostedVideoControls()){
+    try{
+      hostedStoredId=cleanDeviceId(
+        sessionStorage.getItem(DEVICE_ID_STORAGE_KEY)||""
+      );
+    }catch(_){}
+  }
+
+  const startupDeviceId=linkedDeviceId||hostedStoredId;
+
+  productionDeviceId="";
+  firebaseConnected=false;
+  renderDeviceStatus();
+  deviceIdInput.value=startupDeviceId;
+  deviceGateInput.value=startupDeviceId;
+  renderState();
+
+  if(startupDeviceId){
+    deviceGate.classList.add("hidden");
+    await setProductionDeviceId(startupDeviceId,{closeGate:true});
+    return;
+  }
+
+  deviceGate.classList.remove("hidden");
+  setStatus("Enter a Device ID to continue.");
+  setTimeout(()=>deviceGateInput.focus(),0);
+})();;;;;;
+
+async function requestStaffViewerSync(reason="manual"){
+  if(!productionDeviceId){
+    setStatus("Enter a Device ID first.");
+    return;
+  }
+
+  try{
+    await fbPut(staffSyncPath(),{
+      requestId:"staff-sync-"+Date.now()+"-"+Math.random().toString(36).slice(2,8),
+      requestedAt:Date.now(),
+      reason,
+      sourceRevision:Number(state&&state.sourceRevision)||0
+    });
+    setStatus("Staff viewers syncing to OBS.");
+  }catch(err){
+    console.warn("Staff sync:",err);
+    setStatus("Staff sync failed.");
+  }
+}
+
+
+
+
+window.addEventListener("pagehide",()=>{
+  if(!productionDeviceId)return;
+  try{
+    fetch(controlPresencePath(),{
+      method:"PUT",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({
+        online:false,
+        deviceId:productionDeviceId,
+        sessionId:CONTROL_PRESENCE_SESSION_ID,
+        lastSeen:Date.now(),
+        page:"video-controls"
+      }),
+      cache:"no-store",
+      keepalive:true
+    }).catch(()=>{});
+  }catch(_){}
+});
+
+</script>
+</body>
+</html>
