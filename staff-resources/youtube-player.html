@@ -323,7 +323,7 @@ async function tuneSender(sender,maxBitrate=VIDEO_MAX_BITRATE){
       try{e.priority="high"}catch(_){}
       try{e.networkPriority="high"}catch(_){}
     }
-    p.degradationPreference="maintain-resolution";
+    p.degradationPreference="maintain-framerate";
     await sender.setParameters(p);
   }catch(e){console.warn("OBS sender tuning:",e)}
 }
@@ -350,7 +350,7 @@ async function tuneStaffSender(sender,qualityKey){
       try{e.priority="low"}catch(_){}
       try{e.networkPriority="low"}catch(_){}
     }
-    p.degradationPreference=q.auto?"balanced":"maintain-resolution";
+    p.degradationPreference="maintain-framerate";
     await sender.setParameters(p);
   }catch(e){console.warn("Staff sender tuning:",e)}
 }
@@ -624,16 +624,32 @@ async function answerStaff(id,req){
   pc.onconnectionstatechange=()=>{if(["failed","closed"].includes(pc.connectionState))closeStaff(id)};
   await pc.setRemoteDescription(req.offer);const answer=await pc.createAnswer();await pc.setLocalDescription(answer);await waitIceComplete(pc);
   if(staffPeers.get(id)!==pc)return;
-  // Staff negotiation must never be allowed to leave the OBS sender at a
-  // browser-chosen lower priority or different production ceiling.
-  if(obsPc){for(const sender of obsPc.getSenders()){if(sender&&sender.track&&sender.track.kind==="video")await tuneSender(sender)}}
   await fbPut(staffClientPath(id,"answer"),{requestId:String(req.requestId||""),createdAt:Date.now(),description:pc.localDescription,quality,sourceType:"youtube-webrtc",video:{width:profile.width,height:profile.height,fps:profile.fps,maxBitrate:profile.maxBitrate}});
 }
 async function processStaffRequests(){
   const clients=firebaseView&&firebaseView.staff&&firebaseView.staff.clients&&typeof firebaseView.staff.clients==="object"?firebaseView.staff.clients:{};
   const active=new Set(Object.keys(clients));for(const id of [...staffPeers.keys()])if(!active.has(id)){closeStaff(id);staffRequestSignatures.delete(id)}
   if(!state||String(state.sourceType)!=="youtube"||!captureStream)return;
-  for(const [id,node] of Object.entries(clients)){const req=node&&node.request;if(!req||!req.offer||!req.requestId)continue;const sig=String(req.requestId)+"|"+String(req.quality||"720");if(staffRequestSignatures.get(id)===sig)continue;staffRequestSignatures.set(id,sig);try{await answerStaff(id,req)}catch(e){staffRequestSignatures.delete(id);closeStaff(id)}}
+  for(const [id,node] of Object.entries(clients)){
+    const req=node&&node.request;
+    if(req&&req.offer&&req.requestId){
+      const sig=String(req.requestId)+"|"+String(req.quality||"auto");
+      if(staffRequestSignatures.get(id)!==sig){
+        staffRequestSignatures.set(id,sig);
+        try{await answerStaff(id,req)}catch(e){staffRequestSignatures.delete(id);closeStaff(id);continue}
+      }
+    }
+    const qc=node&&node.qualityControl;
+    const pc=staffPeers.get(id);
+    if(qc&&qc.id&&pc){
+      const qsig="quality|"+String(qc.id);
+      if(staffRequestSignatures.get(id+"|quality")!==qsig){
+        staffRequestSignatures.set(id+"|quality",qsig);
+        const q=String(qc.quality||"auto");
+        for(const sender of pc.getSenders())if(sender&&sender.track&&sender.track.kind==="video")await tuneStaffSender(sender,q);
+      }
+    }
+  }
 }
 async function connect(){
   const id=cleanDeviceId(deviceInput.value);
