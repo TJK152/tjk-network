@@ -370,6 +370,8 @@ let firebaseStream=null;
 let firebaseView={};
 let firebaseConnected=false;
 let controlPresenceTimer=null;
+// Persistent explicit Video Controls selection latch. Missing/reconnecting Firebase data must never clear it.
+let lastExplicitControlSelection=null;
 
 /*
 Staff viewers use their own RTCPeerConnection so each viewer may request
