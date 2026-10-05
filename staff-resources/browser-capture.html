@@ -208,6 +208,7 @@ body #panel > #sourceSection{display:block!important;border-top:0;margin-top:0;p
   </div>
 
   <div id="status"></div>
+<div id="v11Diagnostics" class="code" style="display:block;margin-top:10px;font-size:12px;white-space:pre-wrap;">V11 diagnostics waiting…</div>
 </div>
 
 <div id="deviceGate" class="hidden">
@@ -348,6 +349,7 @@ const loadFeedBtn=document.getElementById("loadFeed");
 const startCaptureBtn=document.getElementById("startCapture");
 const sendObsBtn=document.getElementById("sendObs");
 const stopCaptureBtn=document.getElementById("stopCapture");
+const v11Diagnostics=document.getElementById("v11Diagnostics");
 
 let productionDeviceId="";
 let state={
@@ -385,7 +387,7 @@ const staffEffectiveQuality=new Map();
 let staffAdaptiveTimer=null;
 let productionHealth={fps:30,width:1920,height:1080,bitrate:0};
 
-// STAFF RELIABILITY V8: staff uses direct live-track clones; production remains the original master track.
+// V11 PRODUCTION PROTECTION — STAFF 30 FPS SOFT-START: staff uses direct live-track clones; production remains the original master track.
 
 function setStatus(msg){status.textContent=msg}
 function youtubeSenderOnline(){
@@ -947,7 +949,7 @@ async function tuneVideoSender(sender){
 }
 
 
-// STAFF RELIABILITY V8
+// V11 PRODUCTION PROTECTION — STAFF 30 FPS SOFT-START
 // Do not use a canvas-derived MediaStream for Staff Viewer. Chromium could leave
 // that derived track black/frozen after negotiation. Each staff peer instead gets
 // its own clone of the already-live master capture track. We NEVER applyConstraints
@@ -1019,7 +1021,10 @@ async function answerStaffRequest(clientId,request){
   const quality=String(request.quality||"auto");
   const profile=getStaffQualityProfile(quality);
   staffRequestedQuality.set(clientId,quality);
-  staffEffectiveQuality.set(clientId,quality);
+  // V11: every new Staff encoder starts at the lightest 30 FPS profile.
+  // This avoids creating a second 1080p encoder at the exact instant Staff logs in.
+  // The adaptive controller may step upward only after Production proves healthy.
+  staffEffectiveQuality.set(clientId,"360");
 
   // Reliability-first staff path: clone the already-live master tracks directly.
   // Never constrain the clones or the master track. Sender encoding alone controls
@@ -1033,7 +1038,7 @@ async function answerStaffRequest(clientId,request){
     if(staffTrack.kind==="video"){
       const transceiver=peer.getTransceivers().find(t=>t.sender===sender);
       preferH264ForTransceiver(transceiver);
-      await tuneStaffVideoSender(sender,quality);
+      await tuneStaffVideoSender(sender,"360");
     }
   }
 
@@ -1057,10 +1062,10 @@ async function answerStaffRequest(clientId,request){
     description:peer.localDescription,
     quality,
     video:{
-      width:profile.width,
-      height:profile.height,
-      fps:profile.fps,
-      maxBitrate:profile.maxBitrate
+      width:640,
+      height:360,
+      fps:30,
+      maxBitrate:1000000
     }
   });
 }
@@ -1118,8 +1123,18 @@ async function processStaffRequests(){
     staffRequestedQuality.set(clientId,requested);
     const sender=peer.getSenders().find(x=>x.track&&x.track.kind==="video");
     if(sender){
-      await tuneStaffVideoSender(sender,requested);
-      staffEffectiveQuality.set(clientId,requested);
+      // V11: a quality selection changes the ceiling, not the encoder instantly.
+      // Preserve the current 30 FPS level and let the health controller move one
+      // resolution step at a time without shocking the Production encoder.
+      const order=staffQualityOrder();
+      const ceiling=qualityCeilingIndex(requested);
+      let current=order.indexOf(staffEffectiveQuality.get(clientId)||"360");
+      if(current<0)current=0;
+      if(current>ceiling){
+        const key=order[ceiling];
+        await tuneStaffVideoSender(sender,key);
+        staffEffectiveQuality.set(clientId,key);
+      }
     }
   }
 }
@@ -1158,28 +1173,49 @@ async function sampleProductionHealth(){
   }catch(_){}
   return productionHealth;
 }
+let staffHealthySamples=0;
+let lastProductionSnapshotText="";
 async function protectProductionAndAdaptStaff(){
   if(!captureStream || !pc || pc.connectionState!=="connected")return;
   const h=await sampleProductionHealth();
   const order=staffQualityOrder();
-  // Production is sacred. Staff keeps 30fps and sheds spatial/bitrate load first.
   const stressed=(h.fps>0 && h.fps<29.0) || (h.width>0 && h.width<1700);
+  const healthy=(h.fps>=29.5 && h.width>=1700);
+  if(stressed)staffHealthySamples=0;
+  else if(healthy)staffHealthySamples++;
+  else staffHealthySamples=Math.max(0,staffHealthySamples-1);
+
   for(const [clientId,peer] of staffPeers.entries()){
     const sender=peer&&peer.getSenders().find(x=>x.track&&x.track.kind==="video");
     if(!sender)continue;
     const requested=staffRequestedQuality.get(clientId)||"auto";
     const ceiling=qualityCeilingIndex(requested);
-    let current=order.indexOf(staffEffectiveQuality.get(clientId)||requested);
-    if(current<0)current=Math.min(2,ceiling);
+    let current=order.indexOf(staffEffectiveQuality.get(clientId)||"360");
+    if(current<0)current=0;
     let next=current;
-    if(stressed)next=Math.max(0,current-1);
-    else if(h.fps>=29.5 && h.width>=1700 && current<ceiling)next=current+1;
+
+    // Production emergency: shed Staff spatial load immediately, while keeping 30 FPS.
+    if(stressed)next=0;
+    // Ramp only after ~10 seconds of continuously healthy Production. One step only.
+    else if(staffHealthySamples>=4 && current<ceiling){next=current+1;staffHealthySamples=0;}
+
     next=Math.min(next,ceiling);
     const key=order[next];
     if(key!==staffEffectiveQuality.get(clientId)){
       await tuneStaffVideoSender(sender,key);
       staffEffectiveQuality.set(clientId,key);
     }
+  }
+
+  // Lightweight visible diagnostic: no canvas/frame copying.
+  const track=captureStream&&captureStream.getVideoTracks()[0];
+  const cs=track&&track.getSettings?track.getSettings():{};
+  const staffState=Array.from(staffEffectiveQuality.entries()).map(([id,q])=>q+"p30").join(", ")||"none";
+  const snap=`CAPTURE setting: ${cs.width||"?"}×${cs.height||"?"} @ ${cs.frameRate?Number(cs.frameRate).toFixed(1):"?"} FPS | PRODUCTION encoded: ${h.width||"?"}×${h.height||"?"} @ ${h.fps?Number(h.fps).toFixed(1):"?"} FPS | STAFF effective: ${staffState}`;
+  if(snap!==lastProductionSnapshotText){
+    lastProductionSnapshotText=snap;
+    console.log("[TJK V11]",snap);
+    if(v11Diagnostics)v11Diagnostics.textContent=snap;
   }
 }
 function startStaffAdaptiveController(){
