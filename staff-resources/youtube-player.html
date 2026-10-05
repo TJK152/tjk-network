@@ -178,6 +178,9 @@ let pendingRuntimeInfo=null;
 let runtimePublishTimer=null;
 let captureStream=null,obsPc=null,obsSessionId="",obsAnswerSessionId="";
 const staffPeers=new Map(),staffRequestSignatures=new Map();
+const staffRequestedQuality=new Map(),staffEffectiveQuality=new Map(),staffQualitySignatures=new Map();
+let staffAdaptiveTimer=null,staffHealthySamples=0;
+let productionHealth={fps:0,width:0,height:0,bitrate:0};
 
 function cleanDeviceId(v){return String(v||"").trim().replace(/[.#$\[\]\/]/g,"_")}
 function base(s){return `${FIREBASE_BASE}/devices/${encodeURIComponent(deviceId)}/videoUnified/${s}.json`}
@@ -574,7 +577,38 @@ function startFirebaseFallbackPolling(){
   poll();tjkFirebaseFallbackTimer=setInterval(poll,TJK_FIREBASE_FALLBACK_POLL_MS);
 }
 function closeObs(){if(obsPc)try{obsPc.close()}catch(e){}obsPc=null;obsSessionId=""}
-function closeStaff(id){const p=staffPeers.get(id);if(p){try{for(const sender of p.getSenders()){if(sender&&sender.track)try{sender.track.stop()}catch(_){}}}catch(_){}try{p.close()}catch(e){}staffPeers.delete(id)}}
+function closeStaff(id){const p=staffPeers.get(id);if(p){try{for(const sender of p.getSenders()){if(sender&&sender.track)try{sender.track.stop()}catch(_){}}}catch(_){}try{p.close()}catch(e){}staffPeers.delete(id)}staffRequestedQuality.delete(id);staffEffectiveQuality.delete(id);staffQualitySignatures.delete(id)}
+
+function primeProductionVideoSdp(description){
+  if(!description||!description.sdp)return description;
+  let sdp=description.sdp;
+  const m=sdp.match(/m=video[\s\S]*?(?=\r?\nm=|$)/);
+  if(!m)return description;
+  let section=m[0];
+  section=section.replace(/(a=fmtp:\d+[^\r\n]*packetization-mode=1[^\r\n]*)/g,(line)=>{
+    if(/x-google-start-bitrate=/i.test(line))return line;
+    return line+";x-google-start-bitrate=5000;x-google-min-bitrate=3500;x-google-max-bitrate=5500";
+  });
+  return {type:description.type,sdp:sdp.replace(m[0],section)};
+}
+function staffQualityOrder(){return ["360","480","540","720","1080"]}
+function qualityCeilingIndex(q){if(String(q||"auto")==="auto")return 4;const i=staffQualityOrder().indexOf(String(q));return i<0?4:i}
+async function sampleProductionHealth(){
+  if(!obsPc||obsPc.connectionState!=="connected")return productionHealth;
+  try{const sender=obsPc.getSenders().find(x=>x.track&&x.track.kind==="video");if(!sender)return productionHealth;const stats=await sender.getStats();let out=null;stats.forEach(r=>{if(r.type==="outbound-rtp"&&r.kind==="video"&&!r.isRemote)out=r});if(out)productionHealth={fps:Number(out.framesPerSecond||productionHealth.fps||0),width:Number(out.frameWidth||productionHealth.width||0),height:Number(out.frameHeight||productionHealth.height||0),bitrate:productionHealth.bitrate||0}}catch(_){}return productionHealth;
+}
+async function protectProductionAndAdaptStaff(){
+  if(!captureStream||!obsPc||obsPc.connectionState!=="connected"||!staffPeers.size)return;
+  const h=await sampleProductionHealth(),order=staffQualityOrder();
+  const track=captureStream.getVideoTracks()[0],cs=track&&track.getSettings?track.getSettings():{},sourceFps=Number(cs.frameRate)||VIDEO_FPS;
+  const stressed=(h.fps>0&&h.fps<Math.max(18,sourceFps-2.0))||(h.width>0&&h.width<1700);
+  const healthy=(h.fps>=Math.max(18,sourceFps-0.75)&&h.width>=1700);
+  if(stressed)staffHealthySamples=0;else if(healthy)staffHealthySamples++;else staffHealthySamples=Math.max(0,staffHealthySamples-1);
+  for(const [id,pc] of staffPeers.entries()){const sender=pc&&pc.getSenders().find(x=>x.track&&x.track.kind==="video");if(!sender)continue;const requested=staffRequestedQuality.get(id)||"auto",ceiling=qualityCeilingIndex(requested);let current=order.indexOf(staffEffectiveQuality.get(id)||"360");if(current<0)current=0;let next=current;if(stressed)next=0;else if(staffHealthySamples>=4&&current<ceiling){next=current+1;staffHealthySamples=0}next=Math.min(next,ceiling);const key=order[next];if(key!==staffEffectiveQuality.get(id)){await tuneStaffSender(sender,key);staffEffectiveQuality.set(id,key)}}
+}
+function startStaffAdaptiveController(){if(staffAdaptiveTimer)clearInterval(staffAdaptiveTimer);staffAdaptiveTimer=setInterval(()=>protectProductionAndAdaptStaff().catch(()=>{}),2500)}
+startStaffAdaptiveController();
+
 async function startCapture(){
   if(!deviceId){setStatus("Enter Device ID first.");return}
   if(!youtubeFeedLoaded()){
@@ -617,8 +651,8 @@ async function sendObs(){
   obsSessionId=`yt-${Date.now()}-${Math.random().toString(36).slice(2,9)}`;
   obsPc=new RTCPeerConnection({iceServers:[{urls:"stun:stun.l.google.com:19302"},{urls:"stun:stun1.l.google.com:19302"}]});
   for(const tr of captureStream.getTracks()){const sender=obsPc.addTrack(tr,captureStream);if(tr.kind==="video"){preferH264(obsPc.getTransceivers().find(x=>x.sender===sender));await tuneSender(sender)}}
-  obsPc.onconnectionstatechange=()=>{if(obsPc)setStatus("OBS WebRTC: "+obsPc.connectionState)};
-  const offer=await obsPc.createOffer({offerToReceiveAudio:false,offerToReceiveVideo:false});await obsPc.setLocalDescription(offer);await waitIceComplete(obsPc);
+  obsPc.onconnectionstatechange=()=>{if(obsPc){setStatus("OBS WebRTC: "+obsPc.connectionState);if(obsPc.connectionState==="connected"){const sender=obsPc.getSenders().find(x=>x.track&&x.track.kind==="video");if(sender)tuneSender(sender).catch(()=>{})}}};
+  const offer=await obsPc.createOffer({offerToReceiveAudio:false,offerToReceiveVideo:false});const primedOffer=primeProductionVideoSdp(offer);await obsPc.setLocalDescription(primedOffer);await waitIceComplete(obsPc);
   await fbPut(youtubeRawPath("session"),{id:obsSessionId,createdAt:Date.now(),offer:obsPc.localDescription,video:{width:VIDEO_WIDTH,height:VIDEO_HEIGHT,fps:VIDEO_FPS,maxBitrate:VIDEO_MAX_BITRATE}});
 }
 async function answerStaff(id,req){
@@ -626,6 +660,7 @@ async function answerStaff(id,req){
   const pc=new RTCPeerConnection({iceServers:[{urls:"stun:stun.l.google.com:19302"},{urls:"stun:stun1.l.google.com:19302"}]});staffPeers.set(id,pc);
   const quality=String(req.quality||"auto");
   const profile=getStaffQualityProfile(quality);
+  staffRequestedQuality.set(id,quality);staffEffectiveQuality.set(id,"360");
   const stream=new MediaStream();
   for(const tr of captureStream.getTracks()){
     const clone=tr.clone();
@@ -634,13 +669,13 @@ async function answerStaff(id,req){
     const sender=pc.addTrack(clone,stream);
     if(clone.kind==="video"){
       preferH264(pc.getTransceivers().find(x=>x.sender===sender));
-      await tuneStaffSender(sender,quality);
+      await tuneStaffSender(sender,"360");
     }
   }
   pc.onconnectionstatechange=()=>{if(["failed","closed"].includes(pc.connectionState))closeStaff(id)};
   await pc.setRemoteDescription(req.offer);const answer=await pc.createAnswer();await pc.setLocalDescription(answer);await waitIceComplete(pc);
   if(staffPeers.get(id)!==pc)return;
-  await fbPut(staffClientPath(id,"answer"),{requestId:String(req.requestId||""),createdAt:Date.now(),description:pc.localDescription,quality,sourceType:"youtube-webrtc",video:{width:profile.width,height:profile.height,fps:profile.fps,maxBitrate:profile.maxBitrate}});
+  await fbPut(staffClientPath(id,"answer"),{requestId:String(req.requestId||""),createdAt:Date.now(),description:pc.localDescription,quality,sourceType:"youtube-webrtc",video:{width:640,height:360,fps:30,maxBitrate:1000000}});
 }
 async function processStaffRequests(){
   const clients=firebaseView&&firebaseView.staff&&firebaseView.staff.clients&&typeof firebaseView.staff.clients==="object"?firebaseView.staff.clients:{};
@@ -662,7 +697,10 @@ async function processStaffRequests(){
       if(staffRequestSignatures.get(id+"|quality")!==qsig){
         staffRequestSignatures.set(id+"|quality",qsig);
         const q=String(qc.quality||"auto");
-        for(const sender of pc.getSenders())if(sender&&sender.track&&sender.track.kind==="video")await tuneStaffSender(sender,q);
+        staffRequestedQuality.set(id,q);
+        const order=staffQualityOrder(),ceiling=qualityCeilingIndex(q);
+        let current=order.indexOf(staffEffectiveQuality.get(id)||"360");if(current<0)current=0;
+        if(current>ceiling){const key=order[ceiling];for(const sender of pc.getSenders())if(sender&&sender.track&&sender.track.kind==="video")await tuneStaffSender(sender,key);staffEffectiveQuality.set(id,key)}
       }
     }
   }
