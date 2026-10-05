@@ -378,19 +378,7 @@ a different quality without affecting the OBS connection.
 const staffPeers=new Map();
 const staffRequestSignatures=new Map();
 
-// STAFF ISOLATION V7: Staff Viewer never receives the production capture track.
-// A single lightweight 960x540@30 canvas track is derived from the master capture
-// and shared as the source for all staff peer connections.
-let staffPreviewVideo=null;
-let staffPreviewCanvas=null;
-let staffPreviewCtx=null;
-let staffPreviewStream=null;
-let staffPreviewVideoTrack=null;
-let staffPreviewRaf=0;
-const STAFF_PREVIEW_WIDTH=960;
-const STAFF_PREVIEW_HEIGHT=540;
-const STAFF_PREVIEW_FPS=30;
-const STAFF_PREVIEW_MAX_BITRATE=1800000;
+// STAFF RELIABILITY V8: staff uses direct live-track clones; production remains the original master track.
 
 function setStatus(msg){status.textContent=msg}
 function youtubeSenderOnline(){
@@ -945,77 +933,19 @@ async function tuneVideoSender(sender){
 }
 
 
-async function ensureStaffPreviewStream(){
-  if(staffPreviewStream && staffPreviewVideoTrack && staffPreviewVideoTrack.readyState==="live")return staffPreviewStream;
-  if(!captureStream)return null;
-
-  stopStaffPreviewStream();
-
-  const sourceVideo=captureStream.getVideoTracks()[0];
-  if(!sourceVideo)return null;
-
-  staffPreviewVideo=document.createElement("video");
-  staffPreviewVideo.muted=true;
-  staffPreviewVideo.playsInline=true;
-  staffPreviewVideo.autoplay=true;
-  staffPreviewVideo.srcObject=new MediaStream([sourceVideo]);
-  try{await staffPreviewVideo.play()}catch(_){}
-
-  staffPreviewCanvas=document.createElement("canvas");
-  staffPreviewCanvas.width=STAFF_PREVIEW_WIDTH;
-  staffPreviewCanvas.height=STAFF_PREVIEW_HEIGHT;
-  staffPreviewCtx=staffPreviewCanvas.getContext("2d",{alpha:false,desynchronized:true});
-
-  let lastDraw=0;
-  const interval=1000/STAFF_PREVIEW_FPS;
-  const draw=(now)=>{
-    if(!staffPreviewCanvas || !staffPreviewCtx || !staffPreviewVideo)return;
-    if(now-lastDraw>=interval-1){
-      lastDraw=now;
-      try{staffPreviewCtx.drawImage(staffPreviewVideo,0,0,STAFF_PREVIEW_WIDTH,STAFF_PREVIEW_HEIGHT)}catch(_){}
-    }
-    staffPreviewRaf=requestAnimationFrame(draw);
-  };
-  staffPreviewRaf=requestAnimationFrame(draw);
-
-  const canvasStream=staffPreviewCanvas.captureStream(STAFF_PREVIEW_FPS);
-  staffPreviewVideoTrack=canvasStream.getVideoTracks()[0]||null;
-  if(staffPreviewVideoTrack)try{staffPreviewVideoTrack.contentHint="motion"}catch(_){}
-
-  const tracks=[];
-  if(staffPreviewVideoTrack)tracks.push(staffPreviewVideoTrack);
-  // Audio is cheap compared with video and remains independent from video sizing.
-  const sourceAudio=captureStream.getAudioTracks()[0];
-  if(sourceAudio)tracks.push(sourceAudio.clone());
-  staffPreviewStream=new MediaStream(tracks);
-  return staffPreviewStream;
-}
-
-function stopStaffPreviewStream(){
-  if(staffPreviewRaf){cancelAnimationFrame(staffPreviewRaf);staffPreviewRaf=0}
-  if(staffPreviewStream){
-    for(const t of staffPreviewStream.getTracks())try{t.stop()}catch(_){}
-  }
-  if(staffPreviewVideo){
-    try{staffPreviewVideo.pause()}catch(_){}
-    try{staffPreviewVideo.srcObject=null}catch(_){}
-  }
-  staffPreviewStream=null;
-  staffPreviewVideoTrack=null;
-  staffPreviewCtx=null;
-  staffPreviewCanvas=null;
-  staffPreviewVideo=null;
-}
-
+// STAFF RELIABILITY V8
+// Do not use a canvas-derived MediaStream for Staff Viewer. Chromium could leave
+// that derived track black/frozen after negotiation. Each staff peer instead gets
+// its own clone of the already-live master capture track. We NEVER applyConstraints
+// to the clone/source, so staff cannot change the production capture settings.
+// Resolution/bitrate are controlled only by the staff RTCRtpSender encoding.
 const STAFF_QUALITY_PROFILES={
-  // Staff is monitoring only. Every selection is intentionally capped at the
-  // isolated 960x540@30 preview so a viewer can never request a second 1080p encode.
-  "auto":{width:960,height:540,fps:30,maxBitrate:1800000,scale:1,auto:true},
-  "1080":{width:960,height:540,fps:30,maxBitrate:1800000,scale:1},
-  "720":{width:960,height:540,fps:30,maxBitrate:1800000,scale:1},
-  "540":{width:960,height:540,fps:30,maxBitrate:1800000,scale:1},
-  "480":{width:854,height:480,fps:30,maxBitrate:1400000,scale:1.125},
-  "360":{width:640,height:360,fps:30,maxBitrate:1000000,scale:1.5}
+  "auto":{width:1920,height:1080,fps:30,maxBitrate:5000000,scale:1,auto:true},
+  "1080":{width:1920,height:1080,fps:30,maxBitrate:5000000,scale:1},
+  "720":{width:1280,height:720,fps:30,maxBitrate:3000000,scale:1.5},
+  "540":{width:960,height:540,fps:30,maxBitrate:2000000,scale:2},
+  "480":{width:854,height:480,fps:30,maxBitrate:1500000,scale:2.25},
+  "360":{width:640,height:360,fps:30,maxBitrate:1000000,scale:3}
 };
 
 function getStaffQualityProfile(key){
@@ -1030,12 +960,13 @@ async function tuneStaffVideoSender(sender,qualityKey){
     if(!p.encodings||!p.encodings.length)p.encodings=[{}];
     for(const e of p.encodings){
       e.maxBitrate=q.maxBitrate;
-      e.maxFramerate=q.fps;
+      e.maxFramerate=30;
       e.scaleResolutionDownBy=q.scale;
       try{e.priority="low"}catch(_){}
       try{e.networkPriority="low"}catch(_){}
     }
-    p.degradationPreference=q.auto?"balanced":"maintain-resolution";
+    // Frame cadence is more important than preserving compression quality.
+    p.degradationPreference="maintain-framerate";
     await sender.setParameters(p);
   }catch(err){
     console.warn("Staff sender tuning:",err);
@@ -1071,14 +1002,13 @@ async function answerStaffRequest(clientId,request){
   const quality=String(request.quality||"720");
   const profile=getStaffQualityProfile(quality);
 
-  // Never clone or constrain the 1080p production video track for staff.
-  // Staff uses one shared 960x540@30 canvas-derived monitoring source.
-  const sharedStaffStream=await ensureStaffPreviewStream();
-  if(!sharedStaffStream){closeStaffPeer(clientId);return}
+  // Reliability-first staff path: clone the already-live master tracks directly.
+  // Never constrain the clones or the master track. Sender encoding alone controls
+  // staff resolution/bitrate, keeping production capture settings untouched.
   const staffStream=new MediaStream();
-  for(const sourceTrack of sharedStaffStream.getTracks()){
-    // Per-peer clones come only from the already-downscaled staff source.
+  for(const sourceTrack of captureStream.getTracks()){
     const staffTrack=sourceTrack.clone();
+    if(staffTrack.kind==="video")try{staffTrack.contentHint="motion"}catch(_){}
     staffStream.addTrack(staffTrack);
     const sender=peer.addTrack(staffTrack,staffStream);
     if(staffTrack.kind==="video"){
@@ -1180,7 +1110,6 @@ async function startCapture(){
     await tuneCapturedVideoTrack(stream);
     if(captureStream){
       closeAllStaffPeers();
-      stopStaffPreviewStream();
       captureStream.getTracks().forEach(t=>t.stop());
     }
     captureStream=stream;
@@ -1275,7 +1204,6 @@ async function stopRawSession(stopCaptureToo=true){
   }
   if(stopCaptureToo&&captureStream){
     closeAllStaffPeers();
-    stopStaffPreviewStream();
     captureStream.getTracks().forEach(t=>t.stop());
     captureStream=null;
     captureView.textContent="Inactive";
