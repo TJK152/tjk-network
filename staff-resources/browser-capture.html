@@ -208,7 +208,7 @@ body #panel > #sourceSection{display:block!important;border-top:0;margin-top:0;p
   </div>
 
   <div id="status"></div>
-<div id="v11Diagnostics" class="code" style="display:block;margin-top:10px;font-size:12px;white-space:pre-wrap;">V11 diagnostics waiting…</div>
+<div id="v11Diagnostics" class="code" style="display:block;margin-top:10px;font-size:12px;white-space:pre-wrap;">V11.1 diagnostics waiting…</div>
 </div>
 
 <div id="deviceGate" class="hidden">
@@ -386,8 +386,15 @@ const staffRequestedQuality=new Map();
 const staffEffectiveQuality=new Map();
 let staffAdaptiveTimer=null;
 let productionHealth={fps:30,width:1920,height:1080,bitrate:0};
+let productionPreStaffBaseline={fps:0,width:0,height:0};
+let actualCaptureFps=0;
+let actualCaptureVideo=null;
+let actualCaptureFrameTimes=[];
+let actualCaptureCallbackId=0;
+let lastProductionBytes=0;
+let lastProductionBytesAt=0;
 
-// V11 PRODUCTION PROTECTION — STAFF 30 FPS SOFT-START: staff uses direct live-track clones; production remains the original master track.
+// V11.1 PRODUCTION PROTECTION — STAFF 30 FPS + ACTUAL CAPTURE DIAGNOSTICS: staff uses direct live-track clones; production remains the original master track.
 
 function setStatus(msg){status.textContent=msg}
 function youtubeSenderOnline(){
@@ -920,6 +927,44 @@ async function tuneCapturedVideoTrack(stream){
   }catch(err){console.warn("Capture constraints:",err)}
 }
 
+
+function stopActualCaptureFpsMonitor(){
+  if(actualCaptureVideo){
+    try{if(actualCaptureCallbackId&&actualCaptureVideo.cancelVideoFrameCallback)actualCaptureVideo.cancelVideoFrameCallback(actualCaptureCallbackId)}catch(_){}
+    try{actualCaptureVideo.pause()}catch(_){}
+    try{actualCaptureVideo.srcObject=null}catch(_){}
+    try{actualCaptureVideo.remove()}catch(_){}
+  }
+  actualCaptureVideo=null;
+  actualCaptureCallbackId=0;
+  actualCaptureFrameTimes=[];
+  actualCaptureFps=0;
+}
+function startActualCaptureFpsMonitor(stream){
+  stopActualCaptureFpsMonitor();
+  if(!stream||typeof HTMLVideoElement==="undefined")return;
+  const v=document.createElement("video");
+  v.muted=true;v.playsInline=true;v.autoplay=true;
+  v.style.cssText="position:fixed;width:1px;height:1px;left:-10000px;top:-10000px;opacity:0;pointer-events:none";
+  v.srcObject=stream;
+  document.body.appendChild(v);
+  actualCaptureVideo=v;
+  const onFrame=(now)=>{
+    if(actualCaptureVideo!==v)return;
+    actualCaptureFrameTimes.push(now);
+    const cutoff=now-2000;
+    while(actualCaptureFrameTimes.length&&actualCaptureFrameTimes[0]<cutoff)actualCaptureFrameTimes.shift();
+    if(actualCaptureFrameTimes.length>=2){
+      const span=actualCaptureFrameTimes[actualCaptureFrameTimes.length-1]-actualCaptureFrameTimes[0];
+      if(span>0)actualCaptureFps=(actualCaptureFrameTimes.length-1)*1000/span;
+    }
+    actualCaptureCallbackId=v.requestVideoFrameCallback(onFrame);
+  };
+  v.play().then(()=>{
+    if(typeof v.requestVideoFrameCallback==="function")actualCaptureCallbackId=v.requestVideoFrameCallback(onFrame);
+  }).catch(()=>{});
+}
+
 function preferH264ForTransceiver(transceiver){
   if(!transceiver||typeof transceiver.setCodecPreferences!=="function")return;
   try{
@@ -1011,6 +1056,10 @@ async function answerStaffRequest(clientId,request){
   if(!captureStream || !request || !request.offer)return;
 
   closeStaffPeer(clientId);
+  if(staffPeers.size===0){
+    const h=await sampleProductionHealth();
+    productionPreStaffBaseline={fps:Number(h.fps||0),width:Number(h.width||0),height:Number(h.height||0)};
+  }
 
   const peer=new RTCPeerConnection({iceServers:[
     {urls:"stun:stun.l.google.com:19302"},
@@ -1163,11 +1212,18 @@ async function sampleProductionHealth(){
     let out=null;
     stats.forEach(r=>{if(r.type==="outbound-rtp"&&r.kind==="video"&&!r.isRemote)out=r});
     if(out){
+      const now=Date.now();
+      let bitrate=productionHealth.bitrate||0;
+      const bytes=Number(out.bytesSent||0);
+      if(lastProductionBytesAt&&bytes>=lastProductionBytes&&now>lastProductionBytesAt){
+        bitrate=((bytes-lastProductionBytes)*8*1000)/(now-lastProductionBytesAt);
+      }
+      lastProductionBytes=bytes;lastProductionBytesAt=now;
       productionHealth={
         fps:Number(out.framesPerSecond||productionHealth.fps||0),
         width:Number(out.frameWidth||productionHealth.width||0),
         height:Number(out.frameHeight||productionHealth.height||0),
-        bitrate:productionHealth.bitrate||0
+        bitrate
       };
     }
   }catch(_){}
@@ -1179,10 +1235,18 @@ async function protectProductionAndAdaptStaff(){
   if(!captureStream || !pc || pc.connectionState!=="connected")return;
   const h=await sampleProductionHealth();
   const order=staffQualityOrder();
-  const stressed=(h.fps>0 && h.fps<29.0) || (h.width>0 && h.width<1700);
-  const healthy=(h.fps>=29.5 && h.width>=1700);
+
+  // V11.1: compare Staff impact against the Production state that existed before
+  // Staff joined. A 24/25 FPS source must not permanently trap Staff at 360p.
+  // We only shed Staff when Staff actually makes Production materially WORSE.
+  const baseFps=Number(productionPreStaffBaseline.fps||h.fps||0);
+  const baseWidth=Number(productionPreStaffBaseline.width||h.width||0);
+  const fpsDrop=baseFps>0&&h.fps>0?(baseFps-h.fps):0;
+  const widthDrop=baseWidth>0&&h.width>0?(baseWidth-h.width):0;
+  const stressed=(h.width>0&&h.width<1700) || widthDrop>180 || fpsDrop>2.0;
+  const stable=!stressed && h.width>=1700 && (baseFps<=0 || h.fps>=baseFps-1.0);
   if(stressed)staffHealthySamples=0;
-  else if(healthy)staffHealthySamples++;
+  else if(stable)staffHealthySamples++;
   else staffHealthySamples=Math.max(0,staffHealthySamples-1);
 
   for(const [clientId,peer] of staffPeers.entries()){
@@ -1194,11 +1258,13 @@ async function protectProductionAndAdaptStaff(){
     if(current<0)current=0;
     let next=current;
 
-    // Production emergency: shed Staff spatial load immediately, while keeping 30 FPS.
     if(stressed)next=0;
-    // Ramp only after ~10 seconds of continuously healthy Production. One step only.
-    else if(staffHealthySamples>=4 && current<ceiling){next=current+1;staffHealthySamples=0;}
-
+    else if(current<ceiling){
+      // Manual quality selections respond quickly but still move one encoder step
+      // at a time. Auto is deliberately slower and proves Production stability first.
+      const needed=requested==="auto"?3:1;
+      if(staffHealthySamples>=needed){next=current+1;staffHealthySamples=0;}
+    }
     next=Math.min(next,ceiling);
     const key=order[next];
     if(key!==staffEffectiveQuality.get(clientId)){
@@ -1207,14 +1273,16 @@ async function protectProductionAndAdaptStaff(){
     }
   }
 
-  // Lightweight visible diagnostic: no canvas/frame copying.
   const track=captureStream&&captureStream.getVideoTracks()[0];
   const cs=track&&track.getSettings?track.getSettings():{};
   const staffState=Array.from(staffEffectiveQuality.entries()).map(([id,q])=>q+"p30").join(", ")||"none";
-  const snap=`CAPTURE setting: ${cs.width||"?"}×${cs.height||"?"} @ ${cs.frameRate?Number(cs.frameRate).toFixed(1):"?"} FPS | PRODUCTION encoded: ${h.width||"?"}×${h.height||"?"} @ ${h.fps?Number(h.fps).toFixed(1):"?"} FPS | STAFF effective: ${staffState}`;
+  const actual=actualCaptureFps>0?actualCaptureFps.toFixed(1):"warming";
+  const mbps=h.bitrate>0?(h.bitrate/1000000).toFixed(2):"?";
+  const baseline=productionPreStaffBaseline.fps>0?`${productionPreStaffBaseline.width||"?"}×${productionPreStaffBaseline.height||"?"} @ ${productionPreStaffBaseline.fps.toFixed(1)} FPS`:"not set";
+  const snap=`CAPTURE: ${cs.width||"?"}×${cs.height||"?"} | actual ${actual} FPS | setting ${cs.frameRate?Number(cs.frameRate).toFixed(1):"?"} FPS\nPRODUCTION: ${h.width||"?"}×${h.height||"?"} | encoded ${h.fps?Number(h.fps).toFixed(1):"?"} FPS | ${mbps} Mbps\nPRE-STAFF BASELINE: ${baseline}\nSTAFF effective: ${staffState}`;
   if(snap!==lastProductionSnapshotText){
     lastProductionSnapshotText=snap;
-    console.log("[TJK V11]",snap);
+    console.log("[TJK V11.1]",snap);
     if(v11Diagnostics)v11Diagnostics.textContent=snap;
   }
 }
@@ -1247,6 +1315,7 @@ async function startCapture(){
       captureStream.getTracks().forEach(t=>t.stop());
     }
     captureStream=stream;
+    startActualCaptureFpsMonitor(stream);
     const v=stream.getVideoTracks()[0];
     const s=v&&v.getSettings?v.getSettings():{};
     captureView.textContent=`Active ${s.width||"?"}×${s.height||"?"} @ ${s.frameRate?Math.round(s.frameRate):"?"}fps — ready for OBS + staff`;
