@@ -1346,7 +1346,13 @@ function setSourceBadge(type){
     hlsDiagnostics.style.display="none";
   }
   const noFeed=!normalized || normalized==="off";
-  const webRtcShared=normalized==="youtube";
+  const webRtcShared=normalized==="youtube" || normalized==="nfhs";
+  const hlsSyncAvailable=normalized==="hls";
+
+  // Staff quality selection belongs only to WebRTC sources. HLS/MP4 use the
+  // source's fixed encoded quality, so show Auto and disable the selector.
+  quality.disabled=!webRtcShared;
+  if(!webRtcShared)quality.value="auto";
 
   // With production OFF there is nothing to pause, resume, or synchronize.
   // Disable both buttons so the NO VIDEO FEED LOADED state cannot be cleared.
@@ -1355,12 +1361,12 @@ function setSourceBadge(type){
   playPause.style.pointerEvents=noFeed?"none":"auto";
   playPause.title=noFeed?"No video feed loaded":"Pause / Play";
 
-  syncButton.disabled=noFeed||webRtcShared;
-  syncButton.style.opacity=(noFeed||webRtcShared)?".45":"1";
-  syncButton.style.pointerEvents=(noFeed||webRtcShared)?"none":"auto";
+  syncButton.disabled=!hlsSyncAvailable;
+  syncButton.style.opacity=hlsSyncAvailable?"1":".45";
+  syncButton.style.pointerEvents=hlsSyncAvailable?"auto":"none";
   syncButton.title=noFeed
     ?"No video feed loaded"
-    :(webRtcShared?"Not needed — YouTube uses one shared WebRTC timeline":"Sync to OBS");
+    :(hlsSyncAvailable?"Sync to OBS":"Sync is only used for HLS");
 }
 
 function hideAllMedia(){
@@ -2477,10 +2483,10 @@ async function startRawViewerConnection(){
 
     if(st==="connected"){
       setCenter("",false);
-      if(normalizedType(state&&state.sourceType,state&&state.sourceUrl)==="nfhs"){
+      if(["nfhs","youtube"].includes(normalizedType(state&&state.sourceType,state&&state.sourceUrl))){
         // Reassert the live selection after the peer is established. This is an
-        // in-place sender command on Browser Capture; it does NOT reconnect RTC.
-        publishNfhsQualityControl().catch(console.warn);
+        // in-place sender command and does NOT reconnect RTC.
+        publishWebRtcQualityControl().catch(console.warn);
       }
     }else if(st==="failed"||st==="disconnected"){
       setCenter("Browser Capture connection interrupted — reconnecting…",true);
@@ -2929,7 +2935,7 @@ async function connectToDevice(){
   setCenter("Connected to Device ID.\nWaiting for the production video source…",true);
 }
 
-async function publishNfhsQualityControl(){
+async function publishWebRtcQualityControl(){
   if(!deviceId||!clientId)return;
   await fbPut(clientPath("qualityControl"),{
     id:"quality-"+Date.now()+"-"+Math.random().toString(36).slice(2,7),
@@ -2937,24 +2943,20 @@ async function publishNfhsQualityControl(){
     createdAt:Date.now()
   });
 }
+async function publishNfhsQualityControl(){return publishWebRtcQualityControl()}
 
 async function changeQuality(){
   localStorage.setItem(QUALITY_STORAGE_KEY,quality.value);
 
   const type=normalizedType(state&&state.sourceType,state&&state.sourceUrl);
 
-  if(type==="nfhs"){
-    // NFHS V10: change quality in-place on the existing sender. Rebuilding the
-    // Staff peer/encoder here could disturb the protected OBS production encode.
-    await publishNfhsQualityControl();
+  if(type==="nfhs" || type==="youtube"){
+    // Both WebRTC senders change quality in-place. Never rebuild the Staff peer
+    // merely for a quality change, which keeps Production isolated.
+    await publishWebRtcQualityControl();
     setCenter("",false);
-  }else if(type==="hls"){
-    applyHlsQuality();
-  }else if(type==="youtube"){
-    setCenter("Changing WebRTC quality…",true);
-    await startRawViewerConnection();
   }
-  // MP4 has one encoded source quality, so selection cannot change the file.
+  // HLS/MP4 have fixed source quality; the selector is disabled and stays Auto.
 }
 
 function toggleMute(){
