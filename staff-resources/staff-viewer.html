@@ -2477,6 +2477,11 @@ async function startRawViewerConnection(){
 
     if(st==="connected"){
       setCenter("",false);
+      if(normalizedType(state&&state.sourceType,state&&state.sourceUrl)==="nfhs"){
+        // Reassert the live selection after the peer is established. This is an
+        // in-place sender command on Browser Capture; it does NOT reconnect RTC.
+        publishNfhsQualityControl().catch(console.warn);
+      }
     }else if(st==="failed"||st==="disconnected"){
       setCenter("Browser Capture connection interrupted — reconnecting…",true);
       if(!rawReconnectTimer){
@@ -2924,6 +2929,15 @@ async function connectToDevice(){
   setCenter("Connected to Device ID.\nWaiting for the production video source…",true);
 }
 
+async function publishNfhsQualityControl(){
+  if(!deviceId||!clientId)return;
+  await fbPut(clientPath("qualityControl"),{
+    id:"quality-"+Date.now()+"-"+Math.random().toString(36).slice(2,7),
+    quality:quality.value||"auto",
+    createdAt:Date.now()
+  });
+}
+
 async function changeQuality(){
   localStorage.setItem(QUALITY_STORAGE_KEY,quality.value);
 
@@ -2932,11 +2946,7 @@ async function changeQuality(){
   if(type==="nfhs"){
     // NFHS V10: change quality in-place on the existing sender. Rebuilding the
     // Staff peer/encoder here could disturb the protected OBS production encode.
-    await fbPut(clientPath("qualityControl"),{
-      id:"quality-"+Date.now()+"-"+Math.random().toString(36).slice(2,7),
-      quality:quality.value||"auto",
-      createdAt:Date.now()
-    });
+    await publishNfhsQualityControl();
     setCenter("",false);
   }else if(type==="hls"){
     applyHlsQuality();
@@ -3144,9 +3154,10 @@ window.addEventListener("beforeunload",()=>{
 (function init(){
   clientId=makeClientId();
 
-  const savedQuality=localStorage.getItem(QUALITY_STORAGE_KEY);
-  if(["auto","1080","720","540","480","360"].includes(savedQuality))quality.value=savedQuality;
-  else quality.value="auto";
+  // NFHS V11.2: every fresh Staff Viewer page starts in Auto.
+  // A prior manual choice must never silently become the next session's default.
+  quality.value="auto";
+  try{localStorage.setItem(QUALITY_STORAGE_KEY,"auto")}catch(_){}
 
   // Every page load starts Staff audio at full volume and unmuted.
   // Do not restore a stale muted/0% state from an earlier tab or refresh.
