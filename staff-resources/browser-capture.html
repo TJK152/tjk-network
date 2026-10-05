@@ -366,11 +366,6 @@ let state={
 };
 
 let captureStream=null;
-let rawCaptureStream=null;
-let cadence30Stop=null;
-let cadence30Active=false;
-let cadence30SubmittedFps=0;
-let cadence30SubmitTimes=[];
 let pc=null;
 let sessionId=null;
 let firebaseStream=null;
@@ -970,124 +965,6 @@ function startActualCaptureFpsMonitor(stream){
   }).catch(()=>{});
 }
 
-
-async function buildCadence30Stream(sourceStream){
-  const sourceTrack=sourceStream&&sourceStream.getVideoTracks()[0];
-  if(!sourceTrack)return sourceStream;
-  cadence30Active=false;
-  cadence30SubmittedFps=0;
-  cadence30SubmitTimes=[];
-  if(typeof MediaStreamTrackProcessor==="undefined" || typeof MediaStreamTrackGenerator==="undefined" || typeof VideoFrame==="undefined"){
-    console.warn("30 FPS generator APIs unavailable; using native capture cadence.");
-    return sourceStream;
-  }
-  try{
-    const processor=new MediaStreamTrackProcessor({track:sourceTrack});
-    const generator=new MediaStreamTrackGenerator({kind:"video"});
-    try{generator.contentHint="motion"}catch(_){}
-    const reader=processor.readable.getReader();
-    const writer=generator.writable.getWriter();
-    let latest=null, stopped=false;
-    const frameIntervalMs=1000/VIDEO_FPS;
-    const frameIntervalUs=Math.round(1000000/VIDEO_FPS);
-    let outputIndex=0;
-    const epochUs=Math.round(performance.now()*1000);
-
-    // Reader only updates the newest source frame. It never controls output cadence.
-    (async()=>{
-      try{
-        while(!stopped){
-          const {value,done}=await reader.read();
-          if(done)break;
-          const old=latest;
-          latest=value;
-          if(old)try{old.close()}catch(_){}
-        }
-      }catch(err){if(!stopped)console.warn("30 FPS source reader:",err)}
-    })();
-
-    // Dedicated 30 Hz output clock. Every tick creates a NEW VideoFrame object
-    // with a NEW timestamp/duration, even when the captured picture itself has
-    // not changed. Do not key output to source-frame arrival or desiredSize.
-    const pump=(async()=>{
-      let nextDue=performance.now();
-      while(!stopped){
-        const now=performance.now();
-        if(now<nextDue){
-          await new Promise(r=>setTimeout(r,Math.max(0,nextDue-now)));
-          continue;
-        }
-        // If the tab was suspended/stalled, restart the clock rather than burst.
-        if(now-nextDue>frameIntervalMs*3)nextDue=now;
-        if(latest){
-          const timestamp=epochUs+(outputIndex*frameIntervalUs);
-          let out=null;
-          try{
-            // Chromium may collapse byte-identical repeated frames even when
-            // they have fresh timestamps. On generated repeats, alternate a
-            // tiny 2px source crop while preserving the original display size.
-            // This gives the encoder a genuinely different picture without a
-            // 1080p canvas redraw or CPU pixel copy. The visual change is only
-            // ~0.1% of the frame width and is effectively imperceptible.
-            const codedW=Number(latest.codedWidth||latest.displayWidth||0);
-            const codedH=Number(latest.codedHeight||latest.displayHeight||0);
-            const displayW=Number(latest.displayWidth||codedW||0);
-            const displayH=Number(latest.displayHeight||codedH||0);
-            const cropShift=(outputIndex&1)?2:0;
-            if(codedW>4&&codedH>0){
-              out=new VideoFrame(latest,{
-                timestamp,
-                duration:frameIntervalUs,
-                visibleRect:{x:cropShift,y:0,width:codedW-2,height:codedH},
-                displayWidth:displayW,
-                displayHeight:displayH
-              });
-            }else{
-              out=new VideoFrame(latest,{timestamp,duration:frameIntervalUs});
-            }
-            await writer.write(out);
-            const t=performance.now();
-            cadence30SubmitTimes.push(t);
-            const cutoff=t-2000;
-            while(cadence30SubmitTimes.length&&cadence30SubmitTimes[0]<cutoff)cadence30SubmitTimes.shift();
-            if(cadence30SubmitTimes.length>=2){
-              const span=cadence30SubmitTimes[cadence30SubmitTimes.length-1]-cadence30SubmitTimes[0];
-              if(span>0)cadence30SubmittedFps=(cadence30SubmitTimes.length-1)*1000/span;
-            }
-          }catch(err){
-            if(!stopped)console.warn("30 FPS generator writer:",err);
-          }finally{
-            if(out)try{out.close()}catch(_){}
-          }
-          outputIndex++;
-        }
-        nextDue+=frameIntervalMs;
-      }
-    })();
-
-    cadence30Stop=async()=>{
-      if(stopped)return;
-      stopped=true;
-      try{await reader.cancel()}catch(_){}
-      try{if(latest)latest.close()}catch(_){}
-      latest=null;
-      try{await pump}catch(_){}
-      try{await writer.close()}catch(_){}
-      cadence30Active=false;
-      cadence30SubmittedFps=0;
-      cadence30SubmitTimes=[];
-    };
-    sourceTrack.addEventListener("ended",()=>{if(cadence30Stop)cadence30Stop().catch(()=>{})},{once:true});
-    cadence30Active=true;
-    return new MediaStream([generator,...sourceStream.getAudioTracks()]);
-  }catch(err){
-    console.warn("30 FPS generated track unavailable:",err);
-    cadence30Active=false;
-    return sourceStream;
-  }
-}
-function stopCadence30(){const fn=cadence30Stop;cadence30Stop=null;cadence30Active=false;if(fn)try{fn()}catch(_){}}
-
 function preferH264ForTransceiver(transceiver){
   if(!transceiver||typeof transceiver.setCodecPreferences!=="function")return;
   try{
@@ -1411,7 +1288,7 @@ async function protectProductionAndAdaptStaff(){
   const actual=actualCaptureFps>0?actualCaptureFps.toFixed(1):"warming";
   const mbps=h.bitrate>0?(h.bitrate/1000000).toFixed(2):"?";
   const baseline=productionPreStaffBaseline.fps>0?`${productionPreStaffBaseline.width||"?"}×${productionPreStaffBaseline.height||"?"} @ ${productionPreStaffBaseline.fps.toFixed(1)} FPS`:"not set";
-  const snap=`SOURCE: ${cs.width||"?"}×${cs.height||"?"} | actual ${actual} FPS | setting ${cs.frameRate?Number(cs.frameRate).toFixed(1):"?"} FPS\n30 FPS UNIQUE GENERATOR: ${cadence30Active?"ACTIVE":"FALLBACK / OFF"} | submitted ${cadence30SubmittedFps?Number(cadence30SubmittedFps).toFixed(1):"?"} FPS\nPRODUCTION: ${h.width||"?"}×${h.height||"?"} | encoded ${h.fps?Number(h.fps).toFixed(1):"?"} FPS | ${mbps} Mbps\nPRE-STAFF BASELINE: ${baseline}\nSTAFF effective: ${staffState}`;
+  const snap=`CAPTURE: ${cs.width||"?"}×${cs.height||"?"} | actual ${actual} FPS | setting ${cs.frameRate?Number(cs.frameRate).toFixed(1):"?"} FPS\nPRODUCTION: ${h.width||"?"}×${h.height||"?"} | encoded ${h.fps?Number(h.fps).toFixed(1):"?"} FPS | ${mbps} Mbps\nPRE-STAFF BASELINE: ${baseline}\nSTAFF effective: ${staffState}`;
   if(snap!==lastProductionSnapshotText){
     lastProductionSnapshotText=snap;
     console.log("[TJK V11.1]",snap);
@@ -1442,15 +1319,12 @@ async function startCapture(){
       audio:true
     });
     await tuneCapturedVideoTrack(stream);
-    if(captureStream || rawCaptureStream){
+    if(captureStream){
       closeAllStaffPeers();
-      stopCadence30();
-      if(rawCaptureStream)rawCaptureStream.getTracks().forEach(t=>t.stop());
-      else if(captureStream)captureStream.getTracks().forEach(t=>t.stop());
+      captureStream.getTracks().forEach(t=>t.stop());
     }
-    rawCaptureStream=stream;
+    captureStream=stream;
     startActualCaptureFpsMonitor(stream);
-    captureStream=await buildCadence30Stream(stream);
     const v=stream.getVideoTracks()[0];
     const s=v&&v.getSettings?v.getSettings():{};
     captureView.textContent=`Active ${s.width||"?"}×${s.height||"?"} @ ${s.frameRate?Math.round(s.frameRate):"?"}fps — ready for OBS + staff`;
@@ -1540,14 +1414,10 @@ async function stopRawSession(stopCaptureToo=true){
   if(productionDeviceId){
     try{await fbDelete(rawPath("session"));await fbDelete(rawPath("answer"))}catch(_){}
   }
-  if(stopCaptureToo&&(captureStream||rawCaptureStream)){
+  if(stopCaptureToo&&captureStream){
     closeAllStaffPeers();
-    stopActualCaptureFpsMonitor();
-    stopCadence30();
-    if(rawCaptureStream)rawCaptureStream.getTracks().forEach(t=>t.stop());
-    else if(captureStream)captureStream.getTracks().forEach(t=>t.stop());
+    captureStream.getTracks().forEach(t=>t.stop());
     captureStream=null;
-    rawCaptureStream=null;
     captureView.textContent="Inactive";
     updateCaptureSenderButtons();
   }
