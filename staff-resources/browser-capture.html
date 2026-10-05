@@ -494,7 +494,14 @@ function setNestedValue(root,path,data,isPatch){
 }
 
 function getVideoControlsSelection(){
-  const selection=firebaseView && firebaseView.controlSelection;
+  const incoming=firebaseView && firebaseView.controlSelection;
+  // Only a complete, explicit publication from Video Controls may change the latch.
+  // A reconnect, partial SSE snapshot, missing node, or heartbeat gap cannot disable
+  // the button and cannot stop an active capture.
+  if(incoming && incoming.page==="video-controls" && typeof incoming.sourceType==="string"){
+    lastExplicitControlSelection={...incoming};
+  }
+  const selection=lastExplicitControlSelection;
   return {
     selection,
     valid:!!(selection && selection.page==="video-controls"),
@@ -904,7 +911,7 @@ async function tuneCapturedVideoTrack(stream){
     await track.applyConstraints({
       width:{ideal:VIDEO_WIDTH,max:VIDEO_WIDTH},
       height:{ideal:VIDEO_HEIGHT,max:VIDEO_HEIGHT},
-      frameRate:{min:VIDEO_FPS,ideal:VIDEO_FPS,max:VIDEO_FPS}
+      frameRate:{ideal:VIDEO_FPS,max:VIDEO_FPS}
     });
   }catch(err){console.warn("Capture constraints:",err)}
 }
@@ -1192,7 +1199,7 @@ async function startCapture(){
       video:{
         width:{ideal:VIDEO_WIDTH,max:VIDEO_WIDTH},
         height:{ideal:VIDEO_HEIGHT,max:VIDEO_HEIGHT},
-        frameRate:{min:VIDEO_FPS,ideal:VIDEO_FPS,max:VIDEO_FPS}
+        frameRate:{ideal:VIDEO_FPS,max:VIDEO_FPS}
       },
       audio:true
     });
@@ -1459,15 +1466,12 @@ async function requestStaffViewerSync(reason="manual"){
 
 
 
-// Re-evaluate Video Controls presence even when Firebase sends no new event.
-// Active capture gets a 2-minute heartbeat grace period to survive Wix/browser
-// timer throttling; a fresh explicit switch away from NFHS still stops instantly.
-setInterval(()=>{
-  updateCaptureSenderButtons();
-  if(!(captureStream || pc))return;
-  const p=getVideoControlsPresenceStatus();
-  if((p.fresh && !p.nfhs) || !p.grace)stopRawSession(true).catch(()=>{});
-},1000);
+// STABLE NFHS GATE V10.1
+// No heartbeat/presence timeout is allowed to disable or stop Browser Capture.
+// processFirebaseSnapshot() handles only an explicit Video Controls source change.
+// This refreshes button state from the persistent selection latch without ever
+// treating a missing Firebase update as OFF.
+setInterval(()=>updateCaptureSenderButtons(),1000);
 
 </script>
 </body>
