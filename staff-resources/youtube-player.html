@@ -169,6 +169,7 @@ let bridgeReady=false,lastSourceKey="",lastCommandId="";
 let bridgeInfo={isLive:null,dvrAvailable:null,delaySupported:null,duration:0,time:0,seekableStart:null,seekableEnd:null};
 let youtubePlaybackConfirmed=false;
 let pendingEndedState=false;
+let endedScreenLatched=false;
 let senderPresenceTimer=null;
 const FIREBASE_RUNTIME_MIN_INTERVAL_MS=2000;
 let lastRuntimePublishAt=0;
@@ -267,19 +268,26 @@ function updateCaptureButtonState(){
     ?"Start / Restart WebRTC"
     :"No YouTube feed loaded";
 }
-function clearEndedScreen(){
+function clearEndedScreen(force=false){
+  // Once a YouTube video/stream has ended, keep the cover locked on-screen.
+  // Routine bridge TIME/STATE messages are noisy at end-of-media and must not
+  // briefly reveal the underlying YouTube player between ended notifications.
+  if(endedScreenLatched && !force)return;
+  if(force)endedScreenLatched=false;
   pendingEndedState=false;
   endedScreen.textContent="";
   endedScreen.classList.remove("visible");
 }
 
 function showNoFeedScreen(){
+  endedScreenLatched=false;
   pendingEndedState=false;
   youtubePlaybackConfirmed=false;
   endedScreen.textContent="NO VIDEO FEED LOADED";
   endedScreen.classList.add("visible");
 }
 function showEndedScreen(isLive){
+  endedScreenLatched=true;
   endedScreen.textContent=isLive===true?"STREAM ENDED":"VIDEO ENDED";
   endedScreen.classList.add("visible");
 }
@@ -371,7 +379,7 @@ function postBridge(command,extra={}){
 }
 function currentDelay(){return Math.max(0,Number(state&&state.targetLatencySeconds)||0)}
 function bridgeLoad(id){
-  clearEndedScreen();
+  clearEndedScreen(true);
   youtubePlaybackConfirmed=false;
   postBridge("LOAD",{videoId:id,delaySeconds:currentDelay()});
   // Every newly selected feed is an autoplay event. Do not inherit a stale
@@ -384,7 +392,7 @@ function bridgeLoad(id){
 function bridgePlay(){postBridge("PLAY")}
 function bridgePause(){postBridge("PAUSE")}
 function bridgeReload(id){
-  clearEndedScreen();
+  clearEndedScreen(true);
   youtubePlaybackConfirmed=false;
   postBridge("RELOAD",{videoId:id,delaySeconds:currentDelay()});
 }
@@ -469,7 +477,7 @@ async function ensureYouTube(){
   if(key!==lastSourceKey){
     lastSourceKey=key;
     lastCommandId="";
-    clearEndedScreen();
+    clearEndedScreen(true);
     youtubePlaybackConfirmed=false;
     bridgeLoad(id);
     // LOAD itself autoplays and applies targetLatencySeconds at the live edge.
