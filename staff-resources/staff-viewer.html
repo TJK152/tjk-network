@@ -1035,6 +1035,9 @@ function parseYouTubeId(input){
 }
 
 function setCenter(msg,visible=true){
+  // End state is latched for the active source. Routine sync/buffer/login
+  // cleanup is not allowed to erase VIDEO ENDED / STREAM ENDED.
+  if(staffMediaEnded && (!visible || !String(msg||"").trim()))return;
   centerStatus.textContent=msg;
   centerStatus.style.display=visible?"block":"none";
 }
@@ -2767,10 +2770,17 @@ function processFirebaseSnapshot(){
 
   const runtime=currentRuntime();
   if(runtime){
-    const runtimeKey=String(runtime.sourceRevision||0)+"|"+String(runtime.delayReady)+"|"+String(runtime.delayWaiting)+"|"+String(runtime.dvrUnavailable);
+    const runtimeKey=String(runtime.sourceRevision||0)+"|"+String(runtime.delayReady)+"|"+String(runtime.delayWaiting)+"|"+String(runtime.dvrUnavailable)+"|"+String(runtime.streamEnded)+"|"+String(runtime.videoEnded);
     if(runtimeKey!==lastRuntimeReadyKey){
       lastRuntimeReadyKey=runtimeKey;
-      if(runtime.dvrUnavailable && runtime.delaySupported!==false){
+      // OBS production is authoritative about HLS live-vs-VOD termination.
+      // This also covers cases where the Staff browser itself only goes black
+      // and never receives a reliable HTMLMediaElement ended event.
+      if(runtime.streamEnded===true){
+        markStaffMediaEnded(true,"Production HLS runtime reported stream ended");
+      }else if(runtime.videoEnded===true){
+        markStaffMediaEnded(false,"Production runtime reported video ended");
+      }else if(runtime.dvrUnavailable && runtime.delaySupported!==false){
         showProductionDelayState();
       }else if(runtime.delayWaiting){
         showProductionDelayState();
