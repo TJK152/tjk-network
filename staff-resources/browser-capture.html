@@ -369,6 +369,8 @@ let captureStream=null;
 let rawCaptureStream=null;
 let cadence30Stop=null;
 let cadence30Active=false;
+let cadence30SubmittedFps=0;
+let cadence30SubmitTimes=[];
 let pc=null;
 let sessionId=null;
 let firebaseStream=null;
@@ -973,42 +975,95 @@ async function buildCadence30Stream(sourceStream){
   const sourceTrack=sourceStream&&sourceStream.getVideoTracks()[0];
   if(!sourceTrack)return sourceStream;
   cadence30Active=false;
+  cadence30SubmittedFps=0;
+  cadence30SubmitTimes=[];
   if(typeof MediaStreamTrackProcessor==="undefined" || typeof MediaStreamTrackGenerator==="undefined" || typeof VideoFrame==="undefined"){
-    console.warn("30 FPS cadence APIs unavailable; using native capture cadence.");
+    console.warn("30 FPS generator APIs unavailable; using native capture cadence.");
     return sourceStream;
   }
   try{
     const processor=new MediaStreamTrackProcessor({track:sourceTrack});
     const generator=new MediaStreamTrackGenerator({kind:"video"});
+    try{generator.contentHint="motion"}catch(_){}
     const reader=processor.readable.getReader();
     const writer=generator.writable.getWriter();
-    let latest=null, stopped=false, sourceEnded=false;
+    let latest=null, stopped=false;
+    const frameIntervalMs=1000/VIDEO_FPS;
     const frameIntervalUs=Math.round(1000000/VIDEO_FPS);
-    let nextTimestampUs=Math.round(performance.now()*1000);
+    let outputIndex=0;
+    const epochUs=Math.round(performance.now()*1000);
+
+    // Reader only updates the newest source frame. It never controls output cadence.
     (async()=>{
-      try{while(!stopped){const {value,done}=await reader.read();if(done)break;if(latest)try{latest.close()}catch(_){};latest=value}}
-      catch(err){if(!stopped)console.warn("Cadence source reader:",err)}
-      sourceEnded=true;
-    })();
-    (async()=>{
-      while(!stopped){
-        const nowUs=Math.round(performance.now()*1000);
-        if(nowUs<nextTimestampUs){await new Promise(r=>setTimeout(r,Math.max(1,(nextTimestampUs-nowUs)/1000)));continue}
-        if(nowUs-nextTimestampUs>frameIntervalUs*2)nextTimestampUs=nowUs;
-        if(latest && writer.desiredSize!==0){
-          let out=null;
-          try{out=new VideoFrame(latest,{timestamp:nextTimestampUs});await writer.write(out)}
-          catch(err){if(out)try{out.close()}catch(_){};if(!stopped)console.warn("Cadence writer:",err)}
+      try{
+        while(!stopped){
+          const {value,done}=await reader.read();
+          if(done)break;
+          const old=latest;
+          latest=value;
+          if(old)try{old.close()}catch(_){}
         }
-        nextTimestampUs+=frameIntervalUs;
-        if(sourceEnded&&!latest)break;
+      }catch(err){if(!stopped)console.warn("30 FPS source reader:",err)}
+    })();
+
+    // Dedicated 30 Hz output clock. Every tick creates a NEW VideoFrame object
+    // with a NEW timestamp/duration, even when the captured picture itself has
+    // not changed. Do not key output to source-frame arrival or desiredSize.
+    const pump=(async()=>{
+      let nextDue=performance.now();
+      while(!stopped){
+        const now=performance.now();
+        if(now<nextDue){
+          await new Promise(r=>setTimeout(r,Math.max(0,nextDue-now)));
+          continue;
+        }
+        // If the tab was suspended/stalled, restart the clock rather than burst.
+        if(now-nextDue>frameIntervalMs*3)nextDue=now;
+        if(latest){
+          const timestamp=epochUs+(outputIndex*frameIntervalUs);
+          let out=null;
+          try{
+            out=new VideoFrame(latest,{timestamp,duration:frameIntervalUs});
+            await writer.write(out);
+            const t=performance.now();
+            cadence30SubmitTimes.push(t);
+            const cutoff=t-2000;
+            while(cadence30SubmitTimes.length&&cadence30SubmitTimes[0]<cutoff)cadence30SubmitTimes.shift();
+            if(cadence30SubmitTimes.length>=2){
+              const span=cadence30SubmitTimes[cadence30SubmitTimes.length-1]-cadence30SubmitTimes[0];
+              if(span>0)cadence30SubmittedFps=(cadence30SubmitTimes.length-1)*1000/span;
+            }
+          }catch(err){
+            if(!stopped)console.warn("30 FPS generator writer:",err);
+          }finally{
+            if(out)try{out.close()}catch(_){}
+          }
+          outputIndex++;
+        }
+        nextDue+=frameIntervalMs;
       }
-    })().catch(()=>{});
-    cadence30Stop=async()=>{if(stopped)return;stopped=true;try{await reader.cancel()}catch(_){};try{if(latest)latest.close()}catch(_){};latest=null;try{await writer.close()}catch(_){};cadence30Active=false};
+    })();
+
+    cadence30Stop=async()=>{
+      if(stopped)return;
+      stopped=true;
+      try{await reader.cancel()}catch(_){}
+      try{if(latest)latest.close()}catch(_){}
+      latest=null;
+      try{await pump}catch(_){}
+      try{await writer.close()}catch(_){}
+      cadence30Active=false;
+      cadence30SubmittedFps=0;
+      cadence30SubmitTimes=[];
+    };
     sourceTrack.addEventListener("ended",()=>{if(cadence30Stop)cadence30Stop().catch(()=>{})},{once:true});
     cadence30Active=true;
     return new MediaStream([generator,...sourceStream.getAudioTracks()]);
-  }catch(err){console.warn("30 FPS cadence track unavailable:",err);cadence30Active=false;return sourceStream}
+  }catch(err){
+    console.warn("30 FPS generated track unavailable:",err);
+    cadence30Active=false;
+    return sourceStream;
+  }
 }
 function stopCadence30(){const fn=cadence30Stop;cadence30Stop=null;cadence30Active=false;if(fn)try{fn()}catch(_){}}
 
@@ -1335,7 +1390,7 @@ async function protectProductionAndAdaptStaff(){
   const actual=actualCaptureFps>0?actualCaptureFps.toFixed(1):"warming";
   const mbps=h.bitrate>0?(h.bitrate/1000000).toFixed(2):"?";
   const baseline=productionPreStaffBaseline.fps>0?`${productionPreStaffBaseline.width||"?"}×${productionPreStaffBaseline.height||"?"} @ ${productionPreStaffBaseline.fps.toFixed(1)} FPS`:"not set";
-  const snap=`SOURCE: ${cs.width||"?"}×${cs.height||"?"} | actual ${actual} FPS | setting ${cs.frameRate?Number(cs.frameRate).toFixed(1):"?"} FPS\n30 FPS PACER: ${cadence30Active?"ACTIVE":"FALLBACK / OFF"}\nPRODUCTION: ${h.width||"?"}×${h.height||"?"} | encoded ${h.fps?Number(h.fps).toFixed(1):"?"} FPS | ${mbps} Mbps\nPRE-STAFF BASELINE: ${baseline}\nSTAFF effective: ${staffState}`;
+  const snap=`SOURCE: ${cs.width||"?"}×${cs.height||"?"} | actual ${actual} FPS | setting ${cs.frameRate?Number(cs.frameRate).toFixed(1):"?"} FPS\n30 FPS GENERATOR: ${cadence30Active?"ACTIVE":"FALLBACK / OFF"} | submitted ${cadence30SubmittedFps?Number(cadence30SubmittedFps).toFixed(1):"?"} FPS\nPRODUCTION: ${h.width||"?"}×${h.height||"?"} | encoded ${h.fps?Number(h.fps).toFixed(1):"?"} FPS | ${mbps} Mbps\nPRE-STAFF BASELINE: ${baseline}\nSTAFF effective: ${staffState}`;
   if(snap!==lastProductionSnapshotText){
     lastProductionSnapshotText=snap;
     console.log("[TJK V11.1]",snap);
