@@ -395,6 +395,12 @@ function bridgeReload(id){
   clearEndedScreen(true);
   youtubePlaybackConfirmed=false;
   postBridge("RELOAD",{videoId:id,delaySeconds:currentDelay()});
+  // A reload is also a fresh autoplay event. Give the iframe the same guarded
+  // PLAY retries as a normal LOAD so it cannot remain cued/paused after rebuild.
+  postBridge("PLAY");
+  setTimeout(()=>postBridge("PLAY"),150);
+  setTimeout(()=>postBridge("PLAY"),500);
+  setTimeout(()=>postBridge("PLAY"),1200);
 }
 function bridgeGoLive(){postBridge("GO_LIVE",{delaySeconds:currentDelay()})}
 function bridgeForceLive(){
@@ -455,14 +461,15 @@ window.addEventListener("message",event=>{
       youtubePlaybackConfirmed=true;
       pendingEndedState=false;
       showEndedScreen(false);
-    }else if(playerState===0 && youtubePlaybackConfirmed){
-      pendingEndedState=true;
-      evaluateYoutubeEnded();
     }else if(playerState===1 || playerState===3){
+      // Playing/buffering is not an end condition. In particular, YouTube can
+      // briefly report state 0/-1 while a newly loaded video is still starting.
+      // Treat only the bridge's explicit videoEnded/streamEnded flags as final.
       pendingEndedState=false;
     }
 
-    evaluateYoutubeEnded();
+    // Do not infer an ended video from a transient player state. The bridge's
+    // explicit videoEnded/streamEnded signals above are authoritative.
     publishYouTubeRuntime(data);
   }else if(bt==="ERROR"){
     setStatus("YouTube bridge error: "+String(data.error??"unknown"));
