@@ -377,6 +377,11 @@ a different quality without affecting the OBS connection.
 */
 const staffPeers=new Map();
 const staffRequestSignatures=new Map();
+const staffQualitySignatures=new Map();
+const staffRequestedQuality=new Map();
+const staffEffectiveQuality=new Map();
+let staffAdaptiveTimer=null;
+let productionHealth={fps:30,width:1920,height:1080,bitrate:0};
 
 // STAFF RELIABILITY V8: staff uses direct live-track clones; production remains the original master track.
 
@@ -899,7 +904,7 @@ async function tuneCapturedVideoTrack(stream){
     await track.applyConstraints({
       width:{ideal:VIDEO_WIDTH,max:VIDEO_WIDTH},
       height:{ideal:VIDEO_HEIGHT,max:VIDEO_HEIGHT},
-      frameRate:{ideal:VIDEO_FPS,max:VIDEO_FPS}
+      frameRate:{min:VIDEO_FPS,ideal:VIDEO_FPS,max:VIDEO_FPS}
     });
   }catch(err){console.warn("Capture constraints:",err)}
 }
@@ -986,6 +991,9 @@ function closeStaffPeer(clientId){
     try{peer.close()}catch(_){}
     staffPeers.delete(clientId);
   }
+  staffRequestedQuality.delete(clientId);
+  staffEffectiveQuality.delete(clientId);
+  staffQualitySignatures.delete(clientId);
 }
 
 async function answerStaffRequest(clientId,request){
@@ -999,8 +1007,10 @@ async function answerStaffRequest(clientId,request){
   ]});
   staffPeers.set(clientId,peer);
 
-  const quality=String(request.quality||"720");
+  const quality=String(request.quality||"auto");
   const profile=getStaffQualityProfile(quality);
+  staffRequestedQuality.set(clientId,quality);
+  staffEffectiveQuality.set(clientId,quality);
 
   // Reliability-first staff path: clone the already-live master tracks directly.
   // Never constrain the clones or the master track. Sender encoding alone controls
@@ -1068,7 +1078,7 @@ async function processStaffRequests(){
     const request=node && node.request;
     if(!request || !request.offer || !request.requestId)continue;
 
-    const signature=String(request.requestId)+"|"+String(request.quality||"720");
+    const signature=String(request.requestId)+"|"+String(request.quality||"auto");
     if(staffRequestSignatures.get(clientId)===signature)continue;
 
     staffRequestSignatures.set(clientId,signature);
@@ -1083,12 +1093,91 @@ async function processStaffRequests(){
       closeStaffPeer(clientId);
     }
   }
+
+
+  // Quality changes are in-place. Do NOT rebuild the Staff RTCPeerConnection or
+  // create a new encoder merely because a viewer changes resolution.
+  for(const [clientId,node] of Object.entries(clients)){
+    const qc=node && node.qualityControl;
+    if(!qc || !qc.id)continue;
+    const sig=String(qc.id)+"|"+String(qc.quality||"auto");
+    if(staffQualitySignatures.get(clientId)===sig)continue;
+    staffQualitySignatures.set(clientId,sig);
+    const peer=staffPeers.get(clientId);
+    if(!peer)continue;
+    const requested=String(qc.quality||"auto");
+    staffRequestedQuality.set(clientId,requested);
+    const sender=peer.getSenders().find(x=>x.track&&x.track.kind==="video");
+    if(sender){
+      await tuneStaffVideoSender(sender,requested);
+      staffEffectiveQuality.set(clientId,requested);
+    }
+  }
 }
 
 function closeAllStaffPeers(){
   for(const clientId of Array.from(staffPeers.keys()))closeStaffPeer(clientId);
   staffRequestSignatures.clear();
+  staffQualitySignatures.clear();
+  staffRequestedQuality.clear();
+  staffEffectiveQuality.clear();
 }
+
+
+function staffQualityOrder(){return ["360","480","540","720","1080"]}
+function qualityCeilingIndex(q){
+  if(q==="auto")return 4;
+  const i=staffQualityOrder().indexOf(String(q));
+  return i<0?4:i;
+}
+async function sampleProductionHealth(){
+  if(!pc || pc.connectionState!=="connected")return productionHealth;
+  try{
+    const sender=pc.getSenders().find(x=>x.track&&x.track.kind==="video");
+    if(!sender)return productionHealth;
+    const stats=await sender.getStats();
+    let out=null;
+    stats.forEach(r=>{if(r.type==="outbound-rtp"&&r.kind==="video"&&!r.isRemote)out=r});
+    if(out){
+      productionHealth={
+        fps:Number(out.framesPerSecond||productionHealth.fps||0),
+        width:Number(out.frameWidth||productionHealth.width||0),
+        height:Number(out.frameHeight||productionHealth.height||0),
+        bitrate:productionHealth.bitrate||0
+      };
+    }
+  }catch(_){}
+  return productionHealth;
+}
+async function protectProductionAndAdaptStaff(){
+  if(!captureStream || !pc || pc.connectionState!=="connected")return;
+  const h=await sampleProductionHealth();
+  const order=staffQualityOrder();
+  // Production is sacred. Staff keeps 30fps and sheds spatial/bitrate load first.
+  const stressed=(h.fps>0 && h.fps<29.0) || (h.width>0 && h.width<1700);
+  for(const [clientId,peer] of staffPeers.entries()){
+    const sender=peer&&peer.getSenders().find(x=>x.track&&x.track.kind==="video");
+    if(!sender)continue;
+    const requested=staffRequestedQuality.get(clientId)||"auto";
+    const ceiling=qualityCeilingIndex(requested);
+    let current=order.indexOf(staffEffectiveQuality.get(clientId)||requested);
+    if(current<0)current=Math.min(2,ceiling);
+    let next=current;
+    if(stressed)next=Math.max(0,current-1);
+    else if(h.fps>=29.5 && h.width>=1700 && current<ceiling)next=current+1;
+    next=Math.min(next,ceiling);
+    const key=order[next];
+    if(key!==staffEffectiveQuality.get(clientId)){
+      await tuneStaffVideoSender(sender,key);
+      staffEffectiveQuality.set(clientId,key);
+    }
+  }
+}
+function startStaffAdaptiveController(){
+  if(staffAdaptiveTimer)clearInterval(staffAdaptiveTimer);
+  staffAdaptiveTimer=setInterval(()=>protectProductionAndAdaptStaff().catch(()=>{}),2500);
+}
+startStaffAdaptiveController();
 
 function teardownPeer(){
   if(pc){try{pc.close()}catch(_){}pc=null}
@@ -1103,7 +1192,7 @@ async function startCapture(){
       video:{
         width:{ideal:VIDEO_WIDTH,max:VIDEO_WIDTH},
         height:{ideal:VIDEO_HEIGHT,max:VIDEO_HEIGHT},
-        frameRate:{ideal:VIDEO_FPS,max:VIDEO_FPS}
+        frameRate:{min:VIDEO_FPS,ideal:VIDEO_FPS,max:VIDEO_FPS}
       },
       audio:true
     });
