@@ -509,7 +509,8 @@ async function processState(){
   if(next&&typeof next==="object"){
     state=next;
     if(String(state.sourceType)==="youtube" && String(state.sourceId||state.sourceUrl||"").trim()){
-      clearEndedScreen();
+      // Do NOT clear the ended overlay on routine Firebase state/runtime updates.
+      // The overlay is cleared only when a new/reloaded YouTube source is actually loaded.
       await ensureYouTube();
     }else{
       lastSourceKey="";
