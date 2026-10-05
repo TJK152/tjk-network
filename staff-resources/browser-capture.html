@@ -1023,7 +1023,28 @@ async function buildCadence30Stream(sourceStream){
           const timestamp=epochUs+(outputIndex*frameIntervalUs);
           let out=null;
           try{
-            out=new VideoFrame(latest,{timestamp,duration:frameIntervalUs});
+            // Chromium may collapse byte-identical repeated frames even when
+            // they have fresh timestamps. On generated repeats, alternate a
+            // tiny 2px source crop while preserving the original display size.
+            // This gives the encoder a genuinely different picture without a
+            // 1080p canvas redraw or CPU pixel copy. The visual change is only
+            // ~0.1% of the frame width and is effectively imperceptible.
+            const codedW=Number(latest.codedWidth||latest.displayWidth||0);
+            const codedH=Number(latest.codedHeight||latest.displayHeight||0);
+            const displayW=Number(latest.displayWidth||codedW||0);
+            const displayH=Number(latest.displayHeight||codedH||0);
+            const cropShift=(outputIndex&1)?2:0;
+            if(codedW>4&&codedH>0){
+              out=new VideoFrame(latest,{
+                timestamp,
+                duration:frameIntervalUs,
+                visibleRect:{x:cropShift,y:0,width:codedW-2,height:codedH},
+                displayWidth:displayW,
+                displayHeight:displayH
+              });
+            }else{
+              out=new VideoFrame(latest,{timestamp,duration:frameIntervalUs});
+            }
             await writer.write(out);
             const t=performance.now();
             cadence30SubmitTimes.push(t);
@@ -1390,7 +1411,7 @@ async function protectProductionAndAdaptStaff(){
   const actual=actualCaptureFps>0?actualCaptureFps.toFixed(1):"warming";
   const mbps=h.bitrate>0?(h.bitrate/1000000).toFixed(2):"?";
   const baseline=productionPreStaffBaseline.fps>0?`${productionPreStaffBaseline.width||"?"}×${productionPreStaffBaseline.height||"?"} @ ${productionPreStaffBaseline.fps.toFixed(1)} FPS`:"not set";
-  const snap=`SOURCE: ${cs.width||"?"}×${cs.height||"?"} | actual ${actual} FPS | setting ${cs.frameRate?Number(cs.frameRate).toFixed(1):"?"} FPS\n30 FPS GENERATOR: ${cadence30Active?"ACTIVE":"FALLBACK / OFF"} | submitted ${cadence30SubmittedFps?Number(cadence30SubmittedFps).toFixed(1):"?"} FPS\nPRODUCTION: ${h.width||"?"}×${h.height||"?"} | encoded ${h.fps?Number(h.fps).toFixed(1):"?"} FPS | ${mbps} Mbps\nPRE-STAFF BASELINE: ${baseline}\nSTAFF effective: ${staffState}`;
+  const snap=`SOURCE: ${cs.width||"?"}×${cs.height||"?"} | actual ${actual} FPS | setting ${cs.frameRate?Number(cs.frameRate).toFixed(1):"?"} FPS\n30 FPS UNIQUE GENERATOR: ${cadence30Active?"ACTIVE":"FALLBACK / OFF"} | submitted ${cadence30SubmittedFps?Number(cadence30SubmittedFps).toFixed(1):"?"} FPS\nPRODUCTION: ${h.width||"?"}×${h.height||"?"} | encoded ${h.fps?Number(h.fps).toFixed(1):"?"} FPS | ${mbps} Mbps\nPRE-STAFF BASELINE: ${baseline}\nSTAFF effective: ${staffState}`;
   if(snap!==lastProductionSnapshotText){
     lastProductionSnapshotText=snap;
     console.log("[TJK V11.1]",snap);
