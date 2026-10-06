@@ -467,6 +467,9 @@ let lastRuntimeReadyKey="";
 let staffMediaEnded=false,currentMediaIsLive=null,autoSyncTimer=null,autoSyncBusy=false,staffMuted=false;
 const AUTO_SYNC_INTERVAL_MS=60000;
 const AUTO_SYNC_TOLERANCE_SECONDS=0.12;
+const HLS_AUTO_REBUILD_THRESHOLD_SECONDS=2.5;
+const HLS_AUTO_REBUILD_COOLDOWN_MS=180000;
+let lastHlsAutoRebuildAt=0;
 const YOUTUBE_AUTO_SYNC_TOLERANCE_SECONDS=0.35;
 const YOUTUBE_AUTO_SYNC_CONFIRM_MS=350;
 const PROCESSING_MIN_MS=350;
@@ -1472,18 +1475,132 @@ async function syncOnlyIfOutOfSync(reason="conditional-sync",processing=false){
   return true;
 }
 
+async function waitForHlsPlayable(gen,timeoutMs=5000){
+  const started=Date.now();
+  while(Date.now()-started<timeoutMs){
+    if(gen!==sourceGeneration)return false;
+    if(htmlVideo.readyState>=2 && htmlVideo.videoWidth>0)return true;
+    await new Promise(r=>setTimeout(r,100));
+  }
+  return false;
+}
+
+async function silentHlsTransportRebuild(reason="automatic-hls-rebuild"){
+  if(!deviceId||!state||staffMediaEnded||locallyPaused)return false;
+  if(normalizedType(state.sourceType,state.sourceUrl)!=="hls")return false;
+
+  // WebKit HLS playback can require a fresh user gesture after a transport
+  // rebuild. Never risk interrupting a commentator on iPhone/iPad automatically.
+  if(IS_IPAD_WEBKIT||IS_IPHONE_WEBKIT)return false;
+
+  const now=Date.now();
+  if(now-lastHlsAutoRebuildAt<HLS_AUTO_REBUILD_COOLDOWN_MS)return false;
+  lastHlsAutoRebuildAt=now;
+
+  const gen=sourceGeneration;
+  const savedMuted=htmlVideo.muted;
+  const savedVolume=htmlVideo.volume;
+  initialSourceSyncDone=true;
+  hlsDiagCommand("silent HLS rebuild",reason);
+
+  try{
+    if(hls){try{hls.destroy()}catch(_){} hls=null;}
+    try{htmlVideo.pause()}catch(_){}
+    htmlVideo.removeAttribute("src");
+    try{htmlVideo.load()}catch(_){}
+
+    // pause/emptied events during the private rebuild are transport mechanics,
+    // not a Staff pause command. Keep the viewer logically running.
+    locallyPaused=false;
+    setPlayPauseIcon(false);
+
+    await buildHls(state,gen,{silent:true});
+    if(gen!==sourceGeneration)return false;
+    if(!(await waitForHlsPlayable(gen,5000)))return false;
+
+    htmlVideo.muted=savedMuted;
+    htmlVideo.volume=savedVolume;
+    locallyPaused=false;
+
+    const response=await requestProductionSync();
+    if(gen!==sourceGeneration||!response)return false;
+    if(Number(response.sourceRevision||0)!==Number(state.sourceRevision||0))return false;
+    if(response.dvrUnavailable||response.waitingForDelay||response.delayWaiting||response.delayReady===false)return false;
+
+    await applyProductionTarget(response,"hls");
+    if(gen!==sourceGeneration)return false;
+    locallyPaused=false;
+    setPlayPauseIcon(false);
+    return true;
+  }catch(err){
+    console.warn("Silent HLS rebuild failed",err);
+    return false;
+  }finally{
+    htmlVideo.muted=savedMuted;
+    htmlVideo.volume=savedVolume;
+    applyVolume();
+  }
+}
+
 async function autoSyncToProduction(){
   if(!canAutoSync())return;
+  // Automatic drift protection is intentionally HLS/HUDL-only. YouTube and
+  // NFHS use the shared WebRTC timeline, OFF has no media, and MP4 keeps its
+  // established manual/production behavior.
+  if(normalizedType(state.sourceType,state.sourceUrl)!=="hls")return;
+
   autoSyncBusy=true;
   try{
-    await syncOnlyIfOutOfSync("automatic-60-second-sync",false);
+    const gen=sourceGeneration;
+    const first=await requestProductionSync();
+    if(gen!==sourceGeneration||!first)return;
+    if(Number(first.sourceRevision||0)!==Number(state.sourceRevision||0))return;
+    if(first.dvrUnavailable||first.waitingForDelay||first.delayWaiting||first.delayReady===false)return;
+    if(!first.productionPlaying)return;
+
+    const firstTarget=compensatedProductionTarget(first,"hls");
+    const firstLocal=currentStaffPosition("hls");
+    const firstDelta=Number.isFinite(firstLocal)?firstTarget-firstLocal:Infinity;
+
+    // Healthy viewers are completely untouched. No overlay, popup, fade, or
+    // processing message is shown by this background check.
+    if(Number.isFinite(firstDelta) && Math.abs(firstDelta)<=AUTO_SYNC_TOLERANCE_SECONDS)return;
+
+    hlsDiagCommand("silent 60s drift correction",
+      "delta="+(Number.isFinite(firstDelta)?firstDelta.toFixed(3):"n/a"));
+    await applyProductionTarget(first,"hls");
+    if(gen!==sourceGeneration)return;
+
+    // Verify against a NEW OBS position after the seek has had time to land.
+    await new Promise(r=>setTimeout(r,450));
+    if(gen!==sourceGeneration)return;
+    const verify=await requestProductionSync();
+    if(gen!==sourceGeneration||!verify)return;
+    if(Number(verify.sourceRevision||0)!==Number(state.sourceRevision||0))return;
+    if(verify.dvrUnavailable||verify.waitingForDelay||verify.delayWaiting||verify.delayReady===false)return;
+
+    const verifyTarget=compensatedProductionTarget(verify,"hls");
+    const verifyLocal=currentStaffPosition("hls");
+    const remaining=Number.isFinite(verifyLocal)?verifyTarget-verifyLocal:Infinity;
+
+    if(Number.isFinite(remaining) && Math.abs(remaining)<=AUTO_SYNC_TOLERANCE_SECONDS)return;
+
+    // One quiet second correction is enough for ordinary drift.
+    await applyProductionTarget(verify,"hls");
+    if(gen!==sourceGeneration)return;
+
+    // A player still multiple seconds behind after fresh seek correction is
+    // likely a stale MediaSource/HLS session. Rebuild only that HLS transport,
+    // silently, with a long cooldown so it can never loop or spam reloads.
+    if(!Number.isFinite(remaining) || Math.abs(remaining)>=HLS_AUTO_REBUILD_THRESHOLD_SECONDS){
+      await silentHlsTransportRebuild("remaining drift="+(Number.isFinite(remaining)?remaining.toFixed(3):"n/a"));
+    }
   }catch(e){console.warn(e)}
   finally{autoSyncBusy=false}
 }
 function startAutoSyncTimer(){
   if(autoSyncTimer)clearInterval(autoSyncTimer);
-  // DIAGNOSTIC BUILD: 60-second auto-sync disabled while validating manual SYNC.
-  // autoSyncTimer=setInterval(autoSyncToProduction,AUTO_SYNC_INTERVAL_MS);
+  autoSyncTimer=setInterval(autoSyncToProduction,AUTO_SYNC_INTERVAL_MS);
 }
 
 function waitIceComplete(peer,timeoutMs=4000){
@@ -2187,10 +2304,11 @@ async function playAndSyncProduction(reason="staff"){
   return deterministicProductionSync(reason,{processing:!automatic});
 }
 
-async function buildHls(s,generation){
+async function buildHls(s,generation,options={}){
+  const silent=options.silent===true;
   hideAllMedia();
   htmlVideo.classList.remove("hidden");
-  setCenter("Loading HLS / Hudl feed…",true);
+  if(!silent)setCenter("Loading HLS / Hudl feed…",true);
 
   const url=String(s.sourceUrl||"").trim();
   if(!url)throw new Error("No HLS URL.");
@@ -2264,7 +2382,7 @@ async function buildHls(s,generation){
       if(generation!==sourceGeneration)return;
       setHlsDiagnosticEvent("hls:MANIFEST_PARSED","levels="+((data&&data.levels&&data.levels.length)||0));
       applyHlsQuality();
-      if(productionDelayWaiting()){
+      if(productionDelayWaiting() && !silent){
         showProductionDelayState();
       }
     });
@@ -2288,8 +2406,8 @@ async function buildHls(s,generation){
           // ask for the exact media position it is rendering.
           playAndSyncProduction("initial-hls-sync").catch(showError);
         }else if(productionDelayWaiting()){
-          showProductionDelayState();
-        }else{
+          if(!silent)showProductionDelayState();
+        }else if(!silent){
           setCenter("",false);
         }
       }
@@ -2307,7 +2425,7 @@ async function buildHls(s,generation){
         try{hls.startLoad()}catch(_){}
       }else if(data.type===Hls.ErrorTypes.MEDIA_ERROR){
         try{hls.recoverMediaError()}catch(_){}
-      }else{
+      }else if(!silent){
         setCenter("HLS feed could not be played in this browser.",true);
       }
     });
@@ -2335,10 +2453,10 @@ async function buildHls(s,generation){
         initialSourceSyncDone=true;
         playAndSyncProduction("initial-hls-sync").catch(showError);
       }else if(productionDelayWaiting()){
-        showProductionDelayState();
+        if(!silent)showProductionDelayState();
       }else{
         if(!locallyPaused&&state&&state.playing)hlsDiagPlay("native loadedmetadata autoplay").catch(()=>{});
-        setCenter("",false);
+        if(!silent)setCenter("",false);
       }
     },{once:true});
     htmlVideo.load();
