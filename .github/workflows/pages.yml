@@ -1,0 +1,1 @@
+run: python3 scripts/build_clean_routes.py /
