@@ -90,6 +90,11 @@
             const WIX_MOBILE_WIDTH =
                 320;
 
+            // Cropping is applied only to Wix iframe pages.
+            // Values represent visible browser pixels after scaling.
+            const WIX_DESKTOP_TOP_CROP = 50;
+            const WIX_MOBILE_TOP_CROP = 144;
+
             /*
              * Treat the device as a phone whenever its SHORT side is
              * no larger than this value.
@@ -248,8 +253,10 @@
                     WIX_MOBILE_WIDTH;
 
 
+                // Offset before scaling so the visible crop is exactly
+                // 144 screen pixels, regardless of phone orientation.
                 websiteFrame.style.top =
-                    "0";
+                    (-WIX_MOBILE_TOP_CROP / scale) + "px";
 
                 websiteFrame.style.left =
                     "0";
@@ -272,7 +279,7 @@
 
                 websiteFrame.style.height =
                     (
-                        viewportHeight /
+                        (viewportHeight + WIX_MOBILE_TOP_CROP) /
                         scale
                     ) + "px";
 
@@ -292,7 +299,7 @@
 
             function applyStandardFrame() {
                 websiteFrame.style.top =
-                    "0";
+                    (-WIX_DESKTOP_TOP_CROP) + "px";
 
                 websiteFrame.style.left =
                     "0";
@@ -301,7 +308,7 @@
                     "100%";
 
                 websiteFrame.style.height =
-                    "100%";
+                    `calc(100% + ${WIX_DESKTOP_TOP_CROP}px)`;
 
                 websiteFrame.style.transformOrigin =
                     "top left";
