@@ -71,7 +71,7 @@
 
             // Current paid TJK NETWORK website.
             const WEBSITE_ORIGIN =
-                "https://www.tjk152.com";
+                "https://tjk152.wixsite.com/tjk152";
 
             // GitHub Pages project base.
             const GITHUB_PROJECT_BASE =
@@ -107,34 +107,6 @@
 
             const websiteFrame =
                 document.getElementById("websiteFrame");
-
-            let currentFrameIsGitHubResource = false;
-
-            function syncBrowserTitleFromGitHubHtml() {
-                if (!currentFrameIsGitHubResource) {
-                    document.title = "TJK152.COM";
-                    return;
-                }
-
-                try {
-                    const childDocument =
-                        websiteFrame.contentDocument;
-
-                    const childTitle =
-                        childDocument &&
-                        String(childDocument.title || "").trim();
-
-                    document.title =
-                        childTitle || "TJK152.COM";
-                } catch (_) {
-                    document.title = "TJK152.COM";
-                }
-            }
-
-            websiteFrame.addEventListener(
-                "load",
-                syncBrowserTitleFromGitHubHtml
-            );
 
 
             /* =====================================================
@@ -380,66 +352,17 @@
 
             /* =====================================================
                WEBSITE LOADING
+               GitHub clean-resource routing is handled by 404.html.
+               Repository folders are organizational only.
                ===================================================== */
 
-            const GITHUB_RESOURCES = Object.freeze({
-                "staff-viewer": "staff-resources/staff-viewer.html",
-                "youtube-player": "staff-resources/youtube-player.html",
-                "youtube-bridge": "youtube-bridge.html"
-            });
-
-            function getCleanRouteName(path) {
-                const clean = String(path || "/").replace(/^\/+|\/+$/g, "");
-                if (!clean || clean.includes("/")) return "";
-                return clean.toLowerCase();
-            }
-
-            function getGitHubResourceUrl(websitePath) {
-                const route = getCleanRouteName(websitePath);
-                const resource = GITHUB_RESOURCES[route];
-                if (!resource) return "";
-
-                return (
-                    window.location.origin +
-                    GITHUB_PROJECT_BASE.replace(/\/$/, "") +
-                    "/" +
-                    resource
-                );
-            }
-
-
             function loadWebsite() {
-                const websitePath = getWebsitePath();
-                const queryString = window.location.search || "";
-                const resourceUrl = getGitHubResourceUrl(websitePath);
+                const websitePath =
+                    getWebsitePath();
 
-                /*
-                 * GitHub folders are organizational only.
-                 * Registered HTML resources receive clean public routes:
-                 *
-                 * /staff-viewer  -> staff-resources/staff-viewer.html
-                 *
-                 * Everything not registered here continues to Wix. Wix then
-                 * displays its matching page or its normal 404 page.
-                 */
-                if (resourceUrl) {
-                    currentFrameIsGitHubResource = true;
-                    document.title = "TJK152.COM";
+                const queryString =
+                    window.location.search || "";
 
-                    /*
-                     * Keep the clean route in the browser address bar.
-                     * The physical GitHub folder/file is loaded only inside
-                     * the existing full-page iframe.
-                     */
-                    websiteFrame.src =
-                        resourceUrl +
-                        queryString +
-                        (window.location.hash || "");
-                    return;
-                }
-
-                currentFrameIsGitHubResource = false;
-                document.title = "TJK152.COM";
 
                 websiteFrame.src =
                     WEBSITE_ORIGIN +
