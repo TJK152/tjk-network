@@ -93,7 +93,7 @@
             // Cropping is applied only to Wix iframe pages.
             // Values represent visible browser pixels after scaling.
             const WIX_DESKTOP_TOP_CROP = 50;
-            const WIX_MOBILE_TOP_CROP = 144;
+            const WIX_MOBILE_TOP_CROP = 60;
 
             /*
              * Treat the device as a phone whenever its SHORT side is
@@ -255,7 +255,7 @@
 
                 // CSS top is positioned in screen pixels, independently of
                 // the transform scale applied to the iframe content.
-                // Do not divide the 144px crop by the scale.
+                // Do not divide the 60px crop by the scale.
                 websiteFrame.style.top =
                     (-WIX_MOBILE_TOP_CROP) + "px";
 
