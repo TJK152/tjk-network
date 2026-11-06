@@ -80,8 +80,8 @@ function cancelAudioRestore(){
 function restoreAudioAfterPlayback(){
   cancelAudioRestore();
   const generation=embedGeneration;
-  // The autoplay bootstrap starts muted for browser compatibility. Some
-  // YouTube embeds ignore an early unMute until playback is fully active.
+  // Reassert the requested audio state after YouTube starts playing.
+  // Never mute as a startup workaround; browser policy may still block sound.
   // Retry audio state only, never restart or seek the playing video.
   for(const delay of [0,350,1100,2300]){
     audioRestoreTimers.push(setTimeout(()=>{
@@ -153,7 +153,11 @@ function requestInfo(){
 
 function beginBootstrap(){
   if(!ytWindow||bootstrapComplete||bootstrapMuted)return;
-  bootstrapMuted=true; command("mute"); command("playVideo");
+  bootstrapMuted=true;
+  // Try audible autoplay first. Muted bootstrap caused persistent silent playback
+  // when reconnecting to an already-loaded feed.
+  applyDesiredAudio();
+  command("playVideo");
 }
 function forceCaptionsOff(){
   // Disable both known YouTube caption modules and clear any selected track.
@@ -235,7 +239,7 @@ function finishBootstrap(){
   if(bootstrapComplete)return;
   bootstrapComplete=true; bootstrapMuted=false;
   applyDesiredAudio();
-  if(desiredPlaying)command("playVideo"); else command("pauseVideo");
+  if(desiredPlaying){applyDesiredAudio();command("playVideo");} else command("pauseVideo");
   if(pendingGoLive||isLive===true)setTimeout(()=>goLive(desiredDelaySeconds),100);
   emit("BOOTSTRAP_READY");
 }
@@ -458,10 +462,12 @@ window.addEventListener("message",ev=>{
     desiredPlaying=true;
     desiredDelaySeconds=Math.max(0,Number(m.delaySeconds)||0);
     pendingGoLive=true;
+    desiredMuted=false; // New feed defaults to audible unless explicitly muted later.
     buildEmbed(currentVideoId);
   }else if(m.command==="PLAY"){
     desiredPlaying=true;
     if(state!==1)startAutoplayRetry();
+    applyDesiredAudio();
     if(!streamEnded&&!videoEnded){
       if(isLive===true && !liveAcquiredForLoad && !liveAcquireInProgress)goLive(desiredDelaySeconds);
       else {command("playVideo"); if(!bootstrapComplete)beginBootstrap();}
