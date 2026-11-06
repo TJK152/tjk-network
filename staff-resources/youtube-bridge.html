@@ -46,6 +46,29 @@ let desiredPlaying=true;
 let desiredDelaySeconds=0;
 let seekableStart=null,seekableEnd=null,dvrAvailable=null,delaySupported=null;
 let pendingGoLive=false;
+let autoplayRetryTimer=null;
+let autoplayRetryGeneration=0;
+function stopAutoplayRetry(){
+  if(autoplayRetryTimer){clearInterval(autoplayRetryTimer);autoplayRetryTimer=null;}
+}
+function startAutoplayRetry(){
+  stopAutoplayRetry();
+  const generation=embedGeneration;
+  autoplayRetryGeneration=generation;
+  let attempts=0;
+  // YouTube may ignore the initial playVideo until its internal player
+  // is ready. Retry PLAY only; never recreate or reload the video.
+  autoplayRetryTimer=setInterval(()=>{
+    if(generation!==embedGeneration||!ytWindow||!desiredPlaying||streamEnded||videoEnded||state===1){
+      stopAutoplayRetry();return;
+    }
+    command("mute");
+    command("playVideo");
+    requestInfo();
+    if(++attempts>=30)stopAutoplayRetry();
+  },500);
+}
+
 let liveAcquireInProgress=false;
 let liveAcquiredForLoad=false;
 let embedGeneration=0;
@@ -203,6 +226,7 @@ function attachListeners(){
 }
 
 function clearEmbed(){
+  stopAutoplayRetry();
   embedGeneration++;
   liveAcquireToken++;
   liveAcquireInProgress=false;
@@ -230,6 +254,7 @@ function captionsOffOncePlaying(){
   forceCaptionsOff();
 }
 function buildEmbed(id){
+  stopAutoplayRetry();
   currentVideoId=String(id||"").trim();
   if(!currentVideoId)return;
   embedGeneration++; captionAppliedGeneration=-1;
@@ -281,6 +306,7 @@ function buildEmbed(id){
   ytFrame=f;
   ytWindow=f.contentWindow;
   emit("LOAD_CALLED");
+  startAutoplayRetry();
 }
 
 function handleYouTubeMessage(ev){
@@ -300,7 +326,7 @@ function handleYouTubeMessage(ev){
     ytReady=true;
     stateFired=true;
     state=Number(m.info);
-    if(state===1){if(!bootstrapComplete)finishBootstrap();captionsOffOncePlaying();}
+    if(state===1){stopAutoplayRetry();if(!bootstrapComplete)finishBootstrap();captionsOffOncePlaying();}
     if(state===0 && isLive===true){
       streamEnded=true;
       endReason="YouTube live player entered ENDED state";
@@ -378,8 +404,8 @@ function handleYouTubeMessage(ev){
     }
     if(Number.isFinite(Number(info.playerState))){
       const next=Number(info.playerState);
-      if(next!==state){state=next;stateFired=true;emit("STATE");}
-      if(state===1){if(!bootstrapComplete)finishBootstrap();captionsOffOncePlaying();}
+      if(next!==state){state=next;stateFired=true;if(state===1){stopAutoplayRetry();if(!bootstrapComplete)finishBootstrap();captionsOffOncePlaying();}emit("STATE");}
+      if(state===1){stopAutoplayRetry();if(!bootstrapComplete)finishBootstrap();captionsOffOncePlaying();}
     }
     if(!bootstrapComplete&&(duration>0||isLive===true))finishBootstrap();
     emit("TIME");
@@ -410,11 +436,13 @@ window.addEventListener("message",ev=>{
     buildEmbed(currentVideoId);
   }else if(m.command==="PLAY"){
     desiredPlaying=true;
+    if(state!==1)startAutoplayRetry();
     if(!streamEnded&&!videoEnded){
       if(isLive===true && !liveAcquiredForLoad && !liveAcquireInProgress)goLive(desiredDelaySeconds);
       else {command("playVideo"); if(!bootstrapComplete)beginBootstrap();}
     }
   }else if(m.command==="PAUSE"){
+    stopAutoplayRetry();
     desiredPlaying=false;
     if(!bootstrapMuted)command("pauseVideo");
   }else if(m.command==="GO_LIVE"){
@@ -436,6 +464,7 @@ window.addEventListener("message",ev=>{
       liveAcquireToken++;liveAcquireInProgress=false;liveAcquiredForLoad=false;
       captionAppliedGeneration=-1;
       command("loadVideoById",[currentVideoId]);
+      startAutoplayRetry();
       pendingGoLive=true;
       setTimeout(()=>{requestInfo();goLive(desiredDelaySeconds)},700);
     }
