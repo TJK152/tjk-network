@@ -347,8 +347,12 @@ function bridgeReload(id){
   postBridge("RELOAD",{videoId:id,delaySeconds:currentDelay()});
 }
 function bridgeClear(){
-  // Remove the actual nested YouTube iframe, not just cover it with text.
-  postBridge("CLEAR");
+  // Synchronously detach the entire bridge document so no stale YouTube
+  // video, image, audio or asynchronous event survives a Clear Feed.
+  bridgeReady=false;
+  lastSourceKey="";
+  lastCommandId="";
+  youtubeBridge.src="about:blank";
 }
 function bridgeGoLive(){postBridge("GO_LIVE",{delaySeconds:currentDelay()})}
 function bridgeForceLive(){
@@ -435,7 +439,7 @@ async function ensureYouTube(){
   const key=sourceKey(state);
   if(key!==lastSourceKey){
     lastSourceKey=key;
-    lastCommandId="";
+    lastCommandId=String(state.commandId||"");
     clearEndedScreen(true);
     youtubePlaybackConfirmed=false;
     bridgeLoad(id);
@@ -480,6 +484,11 @@ async function processState(){
       // The overlay is cleared only when a new/reloaded YouTube source is actually loaded.
       if(!bridgeReady){endedScreen.textContent="CONNECTING TO YOUTUBE PLAYER";endedScreen.classList.add("visible");}
       feedWasActive=true;
+      // Recreate the bridge only after an actual source becomes active.
+      if(youtubeBridge.getAttribute("src")==="about:blank"){
+        bridgeReady=false;
+        youtubeBridge.src=YOUTUBE_BRIDGE_URL;
+      }
       await ensureYouTube();
     }else{
       lastSourceKey="";
