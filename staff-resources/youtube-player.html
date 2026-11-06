@@ -335,6 +335,8 @@ function bridgeLoad(id){
   clearEndedScreen(true);
   youtubePlaybackConfirmed=false;
   postBridge("LOAD",{videoId:id,delaySeconds:currentDelay()});
+  setTimeout(()=>postBridge("CAPTIONS_OFF"),400);
+  setTimeout(()=>postBridge("CAPTIONS_OFF"),1600);
   // Every newly selected feed is an autoplay event. Do not inherit a stale
   // paused/playing state from the previous feed.
   postBridge("PLAY");
@@ -348,6 +350,8 @@ function bridgeReload(id){
   clearEndedScreen(true);
   youtubePlaybackConfirmed=false;
   postBridge("RELOAD",{videoId:id,delaySeconds:currentDelay()});
+  setTimeout(()=>postBridge("CAPTIONS_OFF"),400);
+  setTimeout(()=>postBridge("CAPTIONS_OFF"),1600);
   // A reload is also a fresh autoplay event. Give the iframe the same guarded
   // PLAY retries as a normal LOAD so it cannot remain cued/paused after rebuild.
   postBridge("PLAY");
