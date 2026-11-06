@@ -37,7 +37,6 @@ button:hover{background:#0093FF;color:#fff}
   border:4px solid #007DFF;border-radius:10px;background:#fff;color:#0326FF;
   font-weight:bold;
 }
-#captureBtn{min-width:230px}
 #changeBtn{min-width:112px}
 #fullscreenBtn{
   width:52px;min-width:52px;height:52px;min-height:52px;padding:0;
@@ -66,14 +65,13 @@ button:hover{background:#0093FF;color:#fff}
   <div id="endedScreen"></div>
 </div>
 <div id="toolbar" class="hidden">
-  <button id="captureBtn" type="button">START / RESTART WEB-RTC</button>
   <button id="changeBtn" type="button">DEVICE ID</button>
   <button id="fullscreenBtn" type="button" title="Full Screen">⛶</button>
 </div>
 <div id="gate">
   <div id="card">
-    <h1>TJK NETWORK YOUTUBE SENDER</h1>
-    <p>Enter the broadcast Device ID. When a YouTube source is loaded, this page becomes the single YouTube player for both OBS and Staff.</p>
+    <h1>TJK NETWORK YOUTUBE PLAYER</h1>
+    <p>Enter the broadcast Device ID. YouTube playback is controlled by TJK NETWORK Video Controls and captured directly by OBS.</p>
     <input id="deviceInput" autocomplete="off" spellcheck="false" placeholder="DEVICE ID">
     <button id="connectBtn">CONNECT</button>
         <div id="status">Waiting for Device ID.</div>
@@ -154,16 +152,16 @@ async function fbGet(url){
 }
 const DEVICE_KEY="tjk-youtube-sender-device-id-v1";
 const DEVICE_TAB_SESSION_KEY="tjk-youtube-sender-device-tab-session-v1";
-const VIDEO_WIDTH=1920,VIDEO_HEIGHT=1080,VIDEO_FPS=30,VIDEO_MAX_BITRATE=5500000;
 
 const gate=document.getElementById("gate"),deviceInput=document.getElementById("deviceInput");
 const connectBtn=document.getElementById("connectBtn");
-const captureBtn=document.getElementById("captureBtn"),fullscreenBtn=document.getElementById("fullscreenBtn"),changeBtn=document.getElementById("changeBtn");
+const fullscreenBtn=document.getElementById("fullscreenBtn"),changeBtn=document.getElementById("changeBtn");
 const toolbar=document.getElementById("toolbar"),statusEl=document.getElementById("status");
 const endedScreen=document.getElementById("endedScreen");
 
 let deviceId="",firebaseStream=null,firebaseView={},state=null;
-const YOUTUBE_BRIDGE_URL="https://tjk152.github.io/tjk-network/youtube-bridge.html";
+// Publish the companion bridge file at this URL before testing.
+const YOUTUBE_BRIDGE_URL="https://tjk152.com/youtube-bridge";
 const youtubeBridge=document.getElementById("youtubeBridge");
 let bridgeReady=false,lastSourceKey="",lastCommandId="";
 let bridgeInfo={isLive:null,dvrAvailable:null,delaySupported:null,duration:0,time:0,seekableStart:null,seekableEnd:null};
@@ -176,16 +174,9 @@ let lastRuntimePublishAt=0;
 let lastRuntimeSemanticKey="";
 let pendingRuntimeInfo=null;
 let runtimePublishTimer=null;
-let captureStream=null,obsPc=null,obsSessionId="",obsAnswerSessionId="";
-const staffPeers=new Map(),staffRequestSignatures=new Map();
-const staffRequestedQuality=new Map(),staffEffectiveQuality=new Map(),staffQualitySignatures=new Map();
-let staffAdaptiveTimer=null,staffHealthySamples=0;
-let productionHealth={fps:0,width:0,height:0,bitrate:0};
 
 function cleanDeviceId(v){return String(v||"").trim().replace(/[.#$\[\]\/]/g,"_")}
 function base(s){return `${FIREBASE_BASE}/devices/${encodeURIComponent(deviceId)}/videoUnified/${s}.json`}
-function youtubeRawPath(s){return base("youtubeRaw/"+s)}
-function staffClientPath(id,s){return base(`staff/clients/${encodeURIComponent(id)}/${s}`)}
 function senderPresencePath(){return base("youtubeSenderPresence")}
 function runtimePath(){return base("runtime")}
 function streamPath(){return base("").replace(/\/\.json$/, ".json")}
@@ -264,13 +255,6 @@ function youtubeFeedLoaded(){
     String(state.sourceId||state.sourceUrl||"").trim()
   );
 }
-function updateCaptureButtonState(){
-  const enabled=youtubeFeedLoaded();
-  captureBtn.disabled=!enabled;
-  captureBtn.title=enabled
-    ?"Start / Restart WebRTC"
-    :"No YouTube feed loaded";
-}
 function clearEndedScreen(force=false){
   // Once a YouTube video/stream has ended, keep the cover locked on-screen.
   // Routine bridge TIME/STATE messages are noisy at end-of-media and must not
@@ -291,7 +275,7 @@ function showNoFeedScreen(){
 }
 function showEndedScreen(isLive){
   endedScreenLatched=true;
-  endedScreen.textContent=isLive===true?"STREAM ENDED":"VIDEO ENDED";
+  endedScreen.textContent="VIDEO FEED ENDED";
   endedScreen.classList.add("visible");
 }
 function evaluateYoutubeEnded(){
@@ -320,63 +304,29 @@ function parseYouTubeId(input){
   try{const u=new URL(s);if(u.hostname.includes("youtu.be"))return u.pathname.split("/").filter(Boolean)[0]||"";if(u.searchParams.get("v"))return u.searchParams.get("v")||"";const p=u.pathname.split("/").filter(Boolean),i=p.findIndex(x=>["embed","live","shorts"].includes(x));if(i>=0&&p[i+1])return p[i+1]}catch(e){}return ""
 }
 function sourceKey(s){return JSON.stringify([s&&s.sourceRevision||0,s&&s.sourceId||"",s&&s.sourceUrl||""])}
-function waitIceComplete(pc,ms=4000){if(pc.iceGatheringState==="complete")return Promise.resolve();return new Promise(res=>{let done=false;const finish=()=>{if(done)return;done=true;pc.removeEventListener("icegatheringstatechange",check);res()},check=()=>{if(pc.iceGatheringState==="complete")finish()};pc.addEventListener("icegatheringstatechange",check);setTimeout(finish,ms)})}
-function preferH264(t){try{if(!t||!t.setCodecPreferences)return;const c=RTCRtpSender.getCapabilities("video").codecs,h=c.filter(x=>x.mimeType.toLowerCase()==="video/h264"),r=c.filter(x=>x.mimeType.toLowerCase()!=="video/h264");if(h.length)t.setCodecPreferences([...h,...r])}catch(e){}}
-async function tuneSender(sender,maxBitrate=VIDEO_MAX_BITRATE){
-  if(!sender||!sender.track||sender.track.kind!=="video")return;
-  try{
-    const p=sender.getParameters();
-    if(!p.encodings||!p.encodings.length)p.encodings=[{}];
-    for(const e of p.encodings){
-      e.maxBitrate=maxBitrate;
-      e.maxFramerate=VIDEO_FPS;
-      e.scaleResolutionDownBy=1;
-      try{e.priority="high"}catch(_){}
-      try{e.networkPriority="high"}catch(_){}
-    }
-    p.degradationPreference="maintain-framerate";
-    await sender.setParameters(p);
-  }catch(e){console.warn("OBS sender tuning:",e)}
-}
-
-const STAFF_QUALITY_PROFILES={
-  "auto":{width:1920,height:1080,fps:30,maxBitrate:5000000,scale:1,auto:true},
-  "1080":{width:1920,height:1080,fps:30,maxBitrate:5000000,scale:1},
-  "720":{width:1280,height:720,fps:30,maxBitrate:3000000,scale:1.5},
-  "540":{width:960,height:540,fps:30,maxBitrate:2000000,scale:2},
-  "480":{width:854,height:480,fps:30,maxBitrate:1500000,scale:2.25},
-  "360":{width:640,height:360,fps:30,maxBitrate:1000000,scale:3}
-};
-function getStaffQualityProfile(key){return STAFF_QUALITY_PROFILES[String(key||"auto")]||STAFF_QUALITY_PROFILES.auto}
-async function tuneStaffSender(sender,qualityKey){
-  if(!sender||!sender.track||sender.track.kind!=="video")return;
-  const q=getStaffQualityProfile(qualityKey);
-  try{
-    const p=sender.getParameters();
-    if(!p.encodings||!p.encodings.length)p.encodings=[{}];
-    for(const e of p.encodings){
-      e.maxBitrate=q.maxBitrate;
-      e.maxFramerate=q.fps;
-      e.scaleResolutionDownBy=q.scale;
-      try{e.priority="low"}catch(_){}
-      try{e.networkPriority="low"}catch(_){}
-    }
-    p.degradationPreference="maintain-framerate";
-    await sender.setParameters(p);
-  }catch(e){console.warn("Staff sender tuning:",e)}
-}
-
 function bridgeOrigin(){
-  try{return new URL(YOUTUBE_BRIDGE_URL).origin}catch(e){return "*"}
+  try{return new URL(YOUTUBE_BRIDGE_URL).origin}catch(e){return "https://tjk152.com"}
+}
+// The website may redirect www to the apex domain. Both are trusted
+// bridge origins, but no other site may send player control events.
+const TJK_BRIDGE_ALLOWED_ORIGINS=new Set([
+  "https://tjk152.com", "https://www.tjk152.com"
+]);
+function postBridgeMessage(message){
+  if(!youtubeBridge||!youtubeBridge.contentWindow)return;
+  // postMessage silently drops messages sent to the wrong redirect origin.
+  for(const origin of TJK_BRIDGE_ALLOWED_ORIGINS){
+    try{youtubeBridge.contentWindow.postMessage(message,origin)}catch(_){}
+  }
 }
 function postBridge(command,extra={}){
   try{
     if(youtubeBridge&&youtubeBridge.contentWindow){
-      youtubeBridge.contentWindow.postMessage({
+      postBridgeMessage({
         tjkYoutubeBridge:true,
         command:String(command||"").toUpperCase(),
         ...extra
-      },bridgeOrigin());
+      });
     }
   }catch(e){}
 }
@@ -415,30 +365,38 @@ function bridgeForceLive(){
 function bridgeSetDelay(){postBridge("SET_DELAY",{delaySeconds:currentDelay()})}
 function bridgeStop(){postBridge("PAUSE")}
 
+youtubeBridge.addEventListener("load",()=>{
+  if(!bridgeReady){
+    setStatus("YouTube bridge loaded; connecting playback controls…");
+    postBridge("PING");
+  }
+});
+// Handshake recovery: READY can be missed when the bridge boots before the
+// parent listener or when the browser delays cross-origin iframe messages.
+// Only retry a tiny control packet; never reload a playing video.
+setInterval(()=>{
+  if(deviceId && !bridgeReady)postBridge("PING");
+},1200);
 youtubeBridge.src=YOUTUBE_BRIDGE_URL;
 
-youtubeBridge.addEventListener("load",()=>{
-  setStatus("YouTube bridge document loaded. Waiting for bridge READY…");
-});
-
 window.addEventListener("message",event=>{
-  if(event.origin!==bridgeOrigin())return;
+  if(!TJK_BRIDGE_ALLOWED_ORIGINS.has(event.origin) || event.source!==youtubeBridge.contentWindow)return;
   const data=event.data||{};
   if(data.tjkYoutubeBridge!==true)return;
 
   const bt=String(data.type||"").toUpperCase();
-  if(bt==="READY"){
+  if(bt==="BRIDGE_READY" || bt==="READY"){
+    if(bridgeReady)return;
     bridgeReady=true;
     lastCommandId="";
     ensureYouTube().then(()=>{
       if(!state||String(state.sourceType)!=="youtube")return;
       // Re-apply the authoritative state after every bridge/iframe rebuild.
-      if(state.command==="reload")bridgeReload(String(state.sourceId||parseYouTubeId(state.sourceUrl)||""));
+      if(state.command==="reload")bridgeReload((parseYouTubeId(state.sourceUrl)||parseYouTubeId(state.sourceId)||""));
       else if(state.command==="golive"||state.command==="delay")bridgeGoLive();
-      else if(state.playing===false)bridgePause();
-      else bridgePlay();
+      else bridgePlay(); // Initial connection always autoplays an already loaded feed.
     }).catch(console.error);
-  }else if(["TIME","STATE","LIVE_STATUS","GO_LIVE","BOOTSTRAP_READY"].includes(bt)){
+  }else if(["TIME","STATE","LIVE_STATUS","GO_LIVE","BOOTSTRAP_READY","YOUTUBE_READY","LOAD_CALLED","LOAD_RECEIVED","VIDEO_ENDED","ENDED"].includes(bt)){
     bridgeInfo={
       isLive:typeof data.isLive==="boolean"?data.isLive:bridgeInfo.isLive,
       dvrAvailable:data.dvrAvailable,
@@ -480,8 +438,9 @@ window.addEventListener("message",event=>{
 });
 
 async function ensureYouTube(){
-  if(!state||String(state.sourceType)!=="youtube"||!bridgeReady)return;
-  const id=String(state.sourceId||parseYouTubeId(state.sourceUrl)||"");
+  if(!state||String(state.sourceType)!=="youtube")return;
+  if(!bridgeReady){setStatus("Waiting for HTTPS YouTube bridge. Confirm youtube-bridge.html is deployed on GitHub Pages.");return;}
+  const id=parseYouTubeId(state.sourceUrl)||parseYouTubeId(state.sourceId)||"";
   if(!id){setStatus("YouTube source has no readable video ID.");return}
   const key=sourceKey(state);
   if(key!==lastSourceKey){
@@ -490,7 +449,7 @@ async function ensureYouTube(){
     clearEndedScreen(true);
     youtubePlaybackConfirmed=false;
     bridgeLoad(id);
-    // LOAD itself autoplays and applies targetLatencySeconds at the live edge.
+    // LOAD always autoplays; the bridge first acquires the live edge, then seeks back by the configured delay.
     // Do not mark the current command handled before the new bridge player is ready.
     setStatus("YouTube source loaded through HTTPS bridge and autoplaying.");
     return;
@@ -510,7 +469,7 @@ function applyCommand(){
     if(bridgeInfo.isLive===true)bridgeForceLive();
     else bridgePlay();
   }else if(state.command==="reload"){
-    const id=String(state.sourceId||parseYouTubeId(state.sourceUrl)||"");
+    const id=parseYouTubeId(state.sourceUrl)||parseYouTubeId(state.sourceId)||"";
     if(id)bridgeReload(id);
   }else if(state.command==="golive"){
     bridgeForceLive();
@@ -529,6 +488,7 @@ async function processState(){
     if(String(state.sourceType)==="youtube" && String(state.sourceId||state.sourceUrl||"").trim()){
       // Do NOT clear the ended overlay on routine Firebase state/runtime updates.
       // The overlay is cleared only when a new/reloaded YouTube source is actually loaded.
+      if(!bridgeReady){endedScreen.textContent="CONNECTING TO YOUTUBE PLAYER";endedScreen.classList.add("visible");}
       await ensureYouTube();
     }else{
       lastSourceKey="";
@@ -545,11 +505,7 @@ async function processState(){
     showNoFeedScreen();
     setStatus("NO VIDEO FEED LOADED");
   }
-  updateCaptureButtonState();
 
-  const ans=firebaseView&&firebaseView.youtubeRaw&&firebaseView.youtubeRaw.answer;
-  if(ans&&obsPc&&ans.sessionId===obsSessionId&&ans.description&&!obsPc.remoteDescription){await obsPc.setRemoteDescription(ans.description);obsAnswerSessionId=ans.sessionId;setStatus("OBS WebRTC connected / negotiating.")}
-  await processStaffRequests();
 }
 async function openStream(){
   if(firebaseStream)try{firebaseStream.close()}catch(e){}
@@ -559,7 +515,7 @@ async function openStream(){
   firebaseStream=new EventSource(`${FIREBASE_BASE}/devices/${encodeURIComponent(deviceId)}/videoUnified.json`);
   const handle=(ev,patch)=>{try{const m=JSON.parse(ev.data||"{}");firebaseView=setNestedValue(firebaseView,m.path,m.data,patch);processState().catch(console.error)}catch(e){console.error(e)}};
   firebaseStream.addEventListener("put",e=>handle(e,false));firebaseStream.addEventListener("patch",e=>handle(e,true));
-  firebaseStream.onopen=()=>{tjkFirebaseStreamHealthy=true;stopFirebaseFallbackPolling();setStatus("NO VIDEO FEED LOADED");if(!state||String(state.sourceType)!=="youtube")showNoFeedScreen()};
+  firebaseStream.onopen=()=>{tjkFirebaseStreamHealthy=true;stopFirebaseFallbackPolling();if(!state||String(state.sourceType)!=="youtube"){setStatus("NO VIDEO FEED LOADED");showNoFeedScreen();}};
   firebaseStream.onerror=()=>{tjkFirebaseStreamHealthy=false;startFirebaseFallbackPolling();setStatus("Firebase reconnecting…")};
 }
 function stopFirebaseFallbackPolling(){
@@ -576,135 +532,6 @@ function startFirebaseFallbackPolling(){
   };
   poll();tjkFirebaseFallbackTimer=setInterval(poll,TJK_FIREBASE_FALLBACK_POLL_MS);
 }
-function closeObs(){if(obsPc)try{obsPc.close()}catch(e){}obsPc=null;obsSessionId=""}
-function closeStaff(id){const p=staffPeers.get(id);if(p){try{for(const sender of p.getSenders()){if(sender&&sender.track)try{sender.track.stop()}catch(_){}}}catch(_){}try{p.close()}catch(e){}staffPeers.delete(id)}staffRequestedQuality.delete(id);staffEffectiveQuality.delete(id);staffQualitySignatures.delete(id)}
-
-function primeProductionVideoSdp(description){
-  if(!description||!description.sdp)return description;
-  let sdp=description.sdp;
-  const m=sdp.match(/m=video[\s\S]*?(?=\r?\nm=|$)/);
-  if(!m)return description;
-  let section=m[0];
-  section=section.replace(/(a=fmtp:\d+[^\r\n]*packetization-mode=1[^\r\n]*)/g,(line)=>{
-    if(/x-google-start-bitrate=/i.test(line))return line;
-    return line+";x-google-start-bitrate=5000;x-google-min-bitrate=3500;x-google-max-bitrate=5500";
-  });
-  return {type:description.type,sdp:sdp.replace(m[0],section)};
-}
-function staffQualityOrder(){return ["360","480","540","720","1080"]}
-function qualityCeilingIndex(q){if(String(q||"auto")==="auto")return 4;const i=staffQualityOrder().indexOf(String(q));return i<0?4:i}
-async function sampleProductionHealth(){
-  if(!obsPc||obsPc.connectionState!=="connected")return productionHealth;
-  try{const sender=obsPc.getSenders().find(x=>x.track&&x.track.kind==="video");if(!sender)return productionHealth;const stats=await sender.getStats();let out=null;stats.forEach(r=>{if(r.type==="outbound-rtp"&&r.kind==="video"&&!r.isRemote)out=r});if(out)productionHealth={fps:Number(out.framesPerSecond||productionHealth.fps||0),width:Number(out.frameWidth||productionHealth.width||0),height:Number(out.frameHeight||productionHealth.height||0),bitrate:productionHealth.bitrate||0}}catch(_){}return productionHealth;
-}
-async function protectProductionAndAdaptStaff(){
-  if(!captureStream||!obsPc||obsPc.connectionState!=="connected"||!staffPeers.size)return;
-  const h=await sampleProductionHealth(),order=staffQualityOrder();
-  const track=captureStream.getVideoTracks()[0],cs=track&&track.getSettings?track.getSettings():{},sourceFps=Number(cs.frameRate)||VIDEO_FPS;
-  const stressed=(h.fps>0&&h.fps<Math.max(18,sourceFps-2.0))||(h.width>0&&h.width<1700);
-  const healthy=(h.fps>=Math.max(18,sourceFps-0.75)&&h.width>=1700);
-  if(stressed)staffHealthySamples=0;else if(healthy)staffHealthySamples++;else staffHealthySamples=Math.max(0,staffHealthySamples-1);
-  for(const [id,pc] of staffPeers.entries()){const sender=pc&&pc.getSenders().find(x=>x.track&&x.track.kind==="video");if(!sender)continue;const requested=staffRequestedQuality.get(id)||"auto",ceiling=qualityCeilingIndex(requested);let current=order.indexOf(staffEffectiveQuality.get(id)||"360");if(current<0)current=0;let next=current;if(stressed)next=0;else if(staffHealthySamples>=4&&current<ceiling){next=current+1;staffHealthySamples=0}next=Math.min(next,ceiling);const key=order[next];if(key!==staffEffectiveQuality.get(id)){await tuneStaffSender(sender,key);staffEffectiveQuality.set(id,key)}}
-}
-function startStaffAdaptiveController(){if(staffAdaptiveTimer)clearInterval(staffAdaptiveTimer);staffAdaptiveTimer=setInterval(()=>protectProductionAndAdaptStaff().catch(()=>{}),2500)}
-startStaffAdaptiveController();
-
-async function startCapture(){
-  if(!deviceId){setStatus("Enter Device ID first.");return}
-  if(!youtubeFeedLoaded()){
-    updateCaptureButtonState();
-    setStatus("NO VIDEO FEED LOADED");
-    return;
-  }
-  try{
-    setStatus("Choose THIS TAB in the browser capture picker and enable tab audio.");
-    const s=await navigator.mediaDevices.getDisplayMedia({
-      video:{
-        width:{ideal:VIDEO_WIDTH,max:VIDEO_WIDTH},
-        height:{ideal:VIDEO_HEIGHT,max:VIDEO_HEIGHT},
-        frameRate:{ideal:VIDEO_FPS,max:VIDEO_FPS}
-      },
-      audio:true,
-      preferCurrentTab:true,
-      selfBrowserSurface:"include",
-      surfaceSwitching:"exclude"
-    });
-    const capturedVideo=s.getVideoTracks()[0];
-    if(capturedVideo){
-      try{capturedVideo.contentHint="motion"}catch(e){}
-      try{
-        await capturedVideo.applyConstraints({
-          width:{ideal:VIDEO_WIDTH,max:VIDEO_WIDTH},
-          height:{ideal:VIDEO_HEIGHT,max:VIDEO_HEIGHT},
-          frameRate:{ideal:VIDEO_FPS,max:VIDEO_FPS}
-        });
-      }catch(e){}
-    }
-    if(captureStream){captureStream.getTracks().forEach(t=>t.stop());for(const id of [...staffPeers.keys()])closeStaff(id)}
-    captureStream=s;s.getTracks().forEach(t=>t.addEventListener("ended",()=>{if(captureStream===s){captureStream=null;setStatus("Capture stopped. Press START / RESTART WEBRTC.")}}));
-    await sendObs();
-    gate.classList.add("hidden");toolbar.classList.remove("hidden");
-  }catch(e){setStatus("Capture cancelled / failed: "+e.message)}
-}
-async function sendObs(){
-  if(!captureStream)return;closeObs();
-  obsSessionId=`yt-${Date.now()}-${Math.random().toString(36).slice(2,9)}`;
-  obsPc=new RTCPeerConnection({iceServers:[{urls:"stun:stun.l.google.com:19302"},{urls:"stun:stun1.l.google.com:19302"}]});
-  for(const tr of captureStream.getTracks()){const sender=obsPc.addTrack(tr,captureStream);if(tr.kind==="video"){preferH264(obsPc.getTransceivers().find(x=>x.sender===sender));await tuneSender(sender)}}
-  obsPc.onconnectionstatechange=()=>{if(obsPc){setStatus("OBS WebRTC: "+obsPc.connectionState);if(obsPc.connectionState==="connected"){const sender=obsPc.getSenders().find(x=>x.track&&x.track.kind==="video");if(sender)tuneSender(sender).catch(()=>{})}}};
-  const offer=await obsPc.createOffer({offerToReceiveAudio:false,offerToReceiveVideo:false});const primedOffer=primeProductionVideoSdp(offer);await obsPc.setLocalDescription(primedOffer);await waitIceComplete(obsPc);
-  await fbPut(youtubeRawPath("session"),{id:obsSessionId,createdAt:Date.now(),offer:obsPc.localDescription,video:{width:VIDEO_WIDTH,height:VIDEO_HEIGHT,fps:VIDEO_FPS,maxBitrate:VIDEO_MAX_BITRATE}});
-}
-async function answerStaff(id,req){
-  if(!captureStream||!req||!req.offer)return;closeStaff(id);
-  const pc=new RTCPeerConnection({iceServers:[{urls:"stun:stun.l.google.com:19302"},{urls:"stun:stun1.l.google.com:19302"}]});staffPeers.set(id,pc);
-  const quality=String(req.quality||"auto");
-  const profile=getStaffQualityProfile(quality);
-  staffRequestedQuality.set(id,quality);staffEffectiveQuality.set(id,"360");
-  const stream=new MediaStream();
-  for(const tr of captureStream.getTracks()){
-    const clone=tr.clone();
-    if(clone.kind==="video")try{clone.contentHint="motion"}catch(_){}
-    stream.addTrack(clone);
-    const sender=pc.addTrack(clone,stream);
-    if(clone.kind==="video"){
-      preferH264(pc.getTransceivers().find(x=>x.sender===sender));
-      await tuneStaffSender(sender,"360");
-    }
-  }
-  pc.onconnectionstatechange=()=>{if(["failed","closed"].includes(pc.connectionState))closeStaff(id)};
-  await pc.setRemoteDescription(req.offer);const answer=await pc.createAnswer();await pc.setLocalDescription(answer);await waitIceComplete(pc);
-  if(staffPeers.get(id)!==pc)return;
-  await fbPut(staffClientPath(id,"answer"),{requestId:String(req.requestId||""),createdAt:Date.now(),description:pc.localDescription,quality,sourceType:"youtube-webrtc",video:{width:640,height:360,fps:30,maxBitrate:1000000}});
-}
-async function processStaffRequests(){
-  const clients=firebaseView&&firebaseView.staff&&firebaseView.staff.clients&&typeof firebaseView.staff.clients==="object"?firebaseView.staff.clients:{};
-  const active=new Set(Object.keys(clients));for(const id of [...staffPeers.keys()])if(!active.has(id)){closeStaff(id);staffRequestSignatures.delete(id)}
-  if(!state||String(state.sourceType)!=="youtube"||!captureStream)return;
-  for(const [id,node] of Object.entries(clients)){
-    const req=node&&node.request;
-    if(req&&req.offer&&req.requestId){
-      const sig=String(req.requestId)+"|"+String(req.quality||"auto");
-      if(staffRequestSignatures.get(id)!==sig){
-        staffRequestSignatures.set(id,sig);
-        try{await answerStaff(id,req)}catch(e){staffRequestSignatures.delete(id);closeStaff(id);continue}
-      }
-    }
-    const qc=node&&node.qualityControl;
-    const pc=staffPeers.get(id);
-    if(qc&&qc.id&&pc){
-      const qsig="quality|"+String(qc.id);
-      if(staffRequestSignatures.get(id+"|quality")!==qsig){
-        staffRequestSignatures.set(id+"|quality",qsig);
-        const q=String(qc.quality||"auto");
-        staffRequestedQuality.set(id,q);
-        const order=staffQualityOrder(),ceiling=qualityCeilingIndex(q);
-        let current=order.indexOf(staffEffectiveQuality.get(id)||"360");if(current<0)current=0;
-        if(current>ceiling){const key=order[ceiling];for(const sender of pc.getSenders())if(sender&&sender.track&&sender.track.kind==="video")await tuneStaffSender(sender,key);staffEffectiveQuality.set(id,key)}
-      }
-    }
-  }
-}
 async function connect(){
   const id=cleanDeviceId(deviceInput.value);
   if(!id){setStatus("Enter a valid Device ID.");return}
@@ -712,19 +539,16 @@ async function connect(){
   try{sessionStorage.setItem(DEVICE_TAB_SESSION_KEY,id)}catch(_){}
   try{localStorage.removeItem(DEVICE_KEY)}catch(_){}
 
-  // Connecting means exactly that: attach to this Device ID, reveal the player,
-  // and let the selected YouTube source load/autoplay. WebRTC capture is NOT
-  // started here; START / RESTART WEB-RTC on the bottom bar remains manual.
+  // Connect to the selected Device ID; OBS captures this browser directly.
   openStream();
   startSenderPresence();
   gate.classList.remove("visible");
   gate.classList.add("hidden");
   toolbar.classList.remove("hidden");
-  setStatus("NO VIDEO FEED LOADED");
+  setStatus("Connecting to video controls…");
   showNoFeedScreen();
-  updateCaptureButtonState();
 }
-connectBtn.onclick=connect;captureBtn.onclick=startCapture;
+connectBtn.onclick=connect;
 
 async function enterFullscreen(){
   try{
@@ -746,7 +570,7 @@ async function enterFullscreen(){
     console.warn("Wix iframe blocked fullscreen:",err);
   }
 
-  // Wix fallback: open this sender standalone and hand off the confirmed Device ID.
+  // Wix fallback: open this player standalone and hand off the confirmed Device ID.
   try{
     const u=new URL(window.location.href);
     const activeDevice=cleanDeviceId(deviceId||sessionStorage.getItem(DEVICE_TAB_SESSION_KEY)||"");
@@ -810,7 +634,7 @@ try{
   gate.classList.remove("hidden");
   gate.classList.add("visible");
 }
-updateCaptureButtonState();
+// No WebRTC capture button remains.
 
 window.addEventListener("pagehide",()=>{
   if(!deviceId)return;
