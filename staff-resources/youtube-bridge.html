@@ -62,7 +62,6 @@ function startAutoplayRetry(){
     if(generation!==embedGeneration||!ytWindow||!desiredPlaying||streamEnded||videoEnded||state===1){
       stopAutoplayRetry();return;
     }
-    command("mute");
     command("playVideo");
     requestInfo();
     if(++attempts>=30)stopAutoplayRetry();
@@ -73,6 +72,31 @@ let liveAcquireInProgress=false;
 let liveAcquiredForLoad=false;
 let embedGeneration=0;
 let captionAppliedGeneration=-1;
+let audioRestoreTimers=[];
+function cancelAudioRestore(){
+  for(const timer of audioRestoreTimers)clearTimeout(timer);
+  audioRestoreTimers=[];
+}
+function restoreAudioAfterPlayback(){
+  cancelAudioRestore();
+  const generation=embedGeneration;
+  // The autoplay bootstrap starts muted for browser compatibility. Some
+  // YouTube embeds ignore an early unMute until playback is fully active.
+  // Retry audio state only, never restart or seek the playing video.
+  for(const delay of [0,350,1100,2300]){
+    audioRestoreTimers.push(setTimeout(()=>{
+      if(generation!==embedGeneration||!ytWindow||state!==1||streamEnded||videoEnded)return;
+      applyDesiredAudio(); // honors intentional MUTE and SET_VOLUME commands
+    },delay));
+  }
+}
+function onPlaybackStarted(){
+  stopAutoplayRetry();
+  if(!bootstrapComplete)finishBootstrap();
+  restoreAudioAfterPlayback();
+  captionsOffOncePlaying();
+}
+
 
 function emit(type,extra={}){
   try{
@@ -226,6 +250,7 @@ function attachListeners(){
 }
 
 function clearEmbed(){
+  cancelAudioRestore();
   stopAutoplayRetry();
   embedGeneration++;
   liveAcquireToken++;
@@ -254,6 +279,7 @@ function captionsOffOncePlaying(){
   forceCaptionsOff();
 }
 function buildEmbed(id){
+  cancelAudioRestore();
   stopAutoplayRetry();
   currentVideoId=String(id||"").trim();
   if(!currentVideoId)return;
@@ -326,7 +352,7 @@ function handleYouTubeMessage(ev){
     ytReady=true;
     stateFired=true;
     state=Number(m.info);
-    if(state===1){stopAutoplayRetry();if(!bootstrapComplete)finishBootstrap();captionsOffOncePlaying();}
+    if(state===1)onPlaybackStarted();
     if(state===0 && isLive===true){
       streamEnded=true;
       endReason="YouTube live player entered ENDED state";
@@ -404,9 +430,8 @@ function handleYouTubeMessage(ev){
     }
     if(Number.isFinite(Number(info.playerState))){
       const next=Number(info.playerState);
-      if(next!==state){state=next;stateFired=true;if(state===1){stopAutoplayRetry();if(!bootstrapComplete)finishBootstrap();captionsOffOncePlaying();}emit("STATE");}
-      if(state===1){stopAutoplayRetry();if(!bootstrapComplete)finishBootstrap();captionsOffOncePlaying();}
-    }
+      if(next!==state){state=next;stateFired=true;if(state===1)onPlaybackStarted();emit("STATE");}
+      }
     if(!bootstrapComplete&&(duration>0||isLive===true))finishBootstrap();
     emit("TIME");
   }
@@ -477,6 +502,7 @@ window.addEventListener("message",ev=>{
     command("setVolume",[desiredVolume]);
     if(desiredMuted)command("mute");
   }else if(m.command==="MUTE"){
+    cancelAudioRestore();
     desiredMuted=true;
     command("mute");
   }else if(m.command==="UNMUTE"){
