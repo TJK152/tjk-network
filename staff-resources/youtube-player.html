@@ -164,6 +164,7 @@ let deviceId="",firebaseStream=null,firebaseView={},state=null;
 const YOUTUBE_BRIDGE_URL="https://tjk152.com/youtube-bridge";
 const youtubeBridge=document.getElementById("youtubeBridge");
 let bridgeReady=false,lastSourceKey="",lastCommandId="";
+let feedWasActive=false;
 let bridgeInfo={isLive:null,dvrAvailable:null,delaySupported:null,duration:0,time:0,seekableStart:null,seekableEnd:null};
 let youtubePlaybackConfirmed=false;
 let pendingEndedState=false;
@@ -334,13 +335,9 @@ function currentDelay(){return Math.max(0,Number(state&&state.targetLatencySecon
 function bridgeLoad(id){
   clearEndedScreen(true);
   youtubePlaybackConfirmed=false;
+  // One LOAD per source. The bridge owns startup and retries after the
+  // YouTube iframe is ready; competing PLAY timers used to race bootstrap.
   postBridge("LOAD",{videoId:id,delaySeconds:currentDelay()});
-  // Every newly selected feed is an autoplay event. Do not inherit a stale
-  // paused/playing state from the previous feed.
-  postBridge("PLAY");
-  setTimeout(()=>postBridge("PLAY"),150);
-  setTimeout(()=>postBridge("PLAY"),500);
-  setTimeout(()=>postBridge("PLAY"),1200);
 }
 function bridgePlay(){postBridge("PLAY")}
 function bridgePause(){postBridge("PAUSE")}
@@ -348,12 +345,10 @@ function bridgeReload(id){
   clearEndedScreen(true);
   youtubePlaybackConfirmed=false;
   postBridge("RELOAD",{videoId:id,delaySeconds:currentDelay()});
-  // A reload is also a fresh autoplay event. Give the iframe the same guarded
-  // PLAY retries as a normal LOAD so it cannot remain cued/paused after rebuild.
-  postBridge("PLAY");
-  setTimeout(()=>postBridge("PLAY"),150);
-  setTimeout(()=>postBridge("PLAY"),500);
-  setTimeout(()=>postBridge("PLAY"),1200);
+}
+function bridgeClear(){
+  // Remove the actual nested YouTube iframe, not just cover it with text.
+  postBridge("CLEAR");
 }
 function bridgeGoLive(){postBridge("GO_LIVE",{delaySeconds:currentDelay()})}
 function bridgeForceLive(){
@@ -389,14 +384,9 @@ window.addEventListener("message",event=>{
     if(bridgeReady)return;
     bridgeReady=true;
     lastCommandId="";
-    ensureYouTube().then(()=>{
-      if(!state||String(state.sourceType)!=="youtube")return;
-      // Re-apply the authoritative state after every bridge/iframe rebuild.
-      if(state.command==="reload")bridgeReload((parseYouTubeId(state.sourceUrl)||parseYouTubeId(state.sourceId)||""));
-      else if(state.command==="golive"||state.command==="delay")bridgeGoLive();
-      else bridgePlay(); // Initial connection always autoplays an already loaded feed.
-    }).catch(console.error);
+    ensureYouTube().catch(console.error);
   }else if(["TIME","STATE","LIVE_STATUS","GO_LIVE","BOOTSTRAP_READY","YOUTUBE_READY","LOAD_CALLED","LOAD_RECEIVED","VIDEO_ENDED","ENDED"].includes(bt)){
+    if(!youtubeFeedLoaded())return;
     bridgeInfo={
       isLive:typeof data.isLive==="boolean"?data.isLive:bridgeInfo.isLive,
       dvrAvailable:data.dvrAvailable,
@@ -462,7 +452,7 @@ function applyCommand(){
   if(cid&&cid===lastCommandId)return;
   if(cid)lastCommandId=cid;
 
-  if(state.command==="pause"||state.playing===false){
+  if(state.command==="pause"){
     bridgePause();
   }else if(state.command==="play"){
     // VOD resumes normally; confirmed live rejoins live-edge minus delay.
@@ -489,11 +479,12 @@ async function processState(){
       // Do NOT clear the ended overlay on routine Firebase state/runtime updates.
       // The overlay is cleared only when a new/reloaded YouTube source is actually loaded.
       if(!bridgeReady){endedScreen.textContent="CONNECTING TO YOUTUBE PLAYER";endedScreen.classList.add("visible");}
+      feedWasActive=true;
       await ensureYouTube();
     }else{
       lastSourceKey="";
       lastCommandId="";
-      postBridge("PAUSE");
+      if(feedWasActive){bridgeClear();feedWasActive=false;}
       showNoFeedScreen();
       setStatus("NO VIDEO FEED LOADED");
     }
@@ -501,7 +492,7 @@ async function processState(){
     state=null;
     lastSourceKey="";
     lastCommandId="";
-    postBridge("PAUSE");
+    if(feedWasActive){bridgeClear();feedWasActive=false;}
     showNoFeedScreen();
     setStatus("NO VIDEO FEED LOADED");
   }
