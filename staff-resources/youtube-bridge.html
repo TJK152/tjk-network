@@ -46,6 +46,8 @@ let desiredPlaying=true;
 let desiredDelaySeconds=0;
 let seekableStart=null,seekableEnd=null,dvrAvailable=null,delaySupported=null;
 let pendingGoLive=false;
+let liveAcquireInProgress=false;
+let liveAcquiredForLoad=false;
 
 function emit(type,extra={}){
   try{
@@ -70,7 +72,7 @@ function emit(type,extra={}){
       delaySupported,
       seekableStart,
       seekableEnd,
-      liveEdge:seekableEnd!==null&&Number.isFinite(Number(seekableEnd))?Number(seekableEnd):(isLive===true&&duration>0?duration:null),
+      liveEdge:Number.isFinite(Number(seekableEnd))?Number(seekableEnd):(isLive===true&&duration>0?duration:null),
       desiredDelaySeconds,
       streamEnded,
       endReason,
@@ -117,7 +119,7 @@ function applyDesiredAudio(){
   command(desiredMuted?"mute":"unMute");
 }
 function liveEdge(){
-  if(seekableEnd!==null&&Number.isFinite(Number(seekableEnd)))return Number(seekableEnd);
+  if(seekableEnd!==null && Number.isFinite(Number(seekableEnd)))return Number(seekableEnd);
   if(isLive===true && Number.isFinite(Number(duration)) && duration>0)return Number(duration);
   return null;
 }
@@ -138,6 +140,8 @@ function acquireFreshLiveTarget(delay=desiredDelaySeconds){
     return false;
   }
 
+  if(liveAcquireInProgress)return true;
+  liveAcquireInProgress=true;
   const token=++liveAcquireToken;
   pendingGoLive=false;
 
@@ -250,7 +254,7 @@ function handleYouTubeMessage(ev){
 
   if(m.event==="onReady"){
     ytReady=true;
-    emit("YOUTUBE_READY");
+    emit("READY");
     requestInfo();
     return;
   }
@@ -328,7 +332,7 @@ function handleYouTubeMessage(ev){
         dvrAvailable=null;
         delaySupported=null;
       }
-      if(pendingGoLive&&liveEdge()!==null)goLive(desiredDelaySeconds);
+      if(pendingGoLive&&!liveAcquireInProgress&&!liveAcquiredForLoad&&liveEdge()!==null)goLive(desiredDelaySeconds);
     }else if(isLive===false){
       dvrAvailable=false;delaySupported=false;
       desiredDelaySeconds=0;
@@ -353,10 +357,6 @@ window.addEventListener("message",ev=>{
   // Commands from the local OBS parent.
   const m=ev.data;
   if(!m||m.tjkYoutubeBridge!==true||!m.command)return;
-  if(m.command==="PING"){
-    emit("BRIDGE_READY",{bridgeDocumentReady:true});
-    return;
-  }
   lastCommand=String(m.command);
 
   if(m.command==="LOAD"){
@@ -370,7 +370,7 @@ window.addEventListener("message",ev=>{
   }else if(m.command==="PLAY"){
     desiredPlaying=true;
     if(!streamEnded&&!videoEnded){
-      if(isLive===true)goLive(desiredDelaySeconds);
+      if(isLive===true && !liveAcquiredForLoad && !liveAcquireInProgress)goLive(desiredDelaySeconds);
       else command("playVideo");
     }
   }else if(m.command==="PAUSE"){
@@ -389,7 +389,8 @@ window.addEventListener("message",ev=>{
     desiredDelaySeconds=Math.max(0,Number(m.delaySeconds)||0);
     streamEnded=false;videoEnded=false;endReason="";
     // Keep the existing iframe/capture surface alive. Re-cue the same video
-    // in-place instead of destroying/recreating the iframe unnecessarily.
+    // in-place instead of destroying/recreating the iframe (which produced
+    // a persistent black WebRTC capture on reload).
     if(currentVideoId){
       command("loadVideoById",[currentVideoId]);
       pendingGoLive=true;
@@ -417,12 +418,9 @@ window.addEventListener("message",ev=>{
 
 // The local player waits for bridge READY before sending LOAD. This READY is
 // bridge-document readiness, not YouTube readiness.
-emit("BRIDGE_READY",{bridgeDocumentReady:true});
+emit("READY");
 
 setInterval(()=>{
-  // The parent may attach its listener after the first READY packet.
-  // Repeat until it acknowledges readiness with a LOAD command.
-  if(!loadReceived)emit("BRIDGE_READY",{bridgeDocumentReady:true});
   if(ytWindow){
     ytPost({event:"listening",id:"tjkYoutube"});
     attachListeners();
