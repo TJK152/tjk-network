@@ -46,7 +46,8 @@ let desiredPlaying=true;
 let desiredDelaySeconds=0;
 let seekableStart=null,seekableEnd=null,dvrAvailable=null,delaySupported=null;
 let pendingGoLive=false;
-let lastCaptionsOffAt=0;
+let captionGuardGeneration=0;
+let lastCaptionGuardAt=0;
 let liveAcquireInProgress=false;
 let liveAcquiredForLoad=false;
 
@@ -108,19 +109,29 @@ function beginBootstrap(){
   bootstrapMuted=true; command("mute"); command("playVideo");
 }
 function forceCaptionsOff(){
-  // Enforce captions OFF for every video, live stream, reload, and player
-  // initialization. YouTube may restore a viewer's caption preference after
-  // the iframe initially loads, so this is repeated at safe intervals.
-  lastCaptionsOffAt=Date.now();
-  command("setOption",["captions","track",{}]);
-  command("setOption",["cc","track",{}]);
+  // Disable both known YouTube caption modules and clear any selected track.
   command("unloadModule",["captions"]);
   command("unloadModule",["cc"]);
-}
-function enforceCaptionsOff(){
-  if(ytWindow && Date.now()-lastCaptionsOffAt>=2000)forceCaptionsOff();
+  command("setOption",["captions","track",{}]);
+  command("setOption",["cc","track",{}]);
 }
 
+// Caption enforcement is intentionally deferred until playback has initialized.
+// Sending module commands during the muted autoplay bootstrap can prevent
+// playback from starting in some embedded YouTube players.
+function captionsOffAfterPlayback(){
+  const generation=captionGuardGeneration;
+  [650, 2200, 5500].forEach(ms=>setTimeout(()=>{
+    if(generation!==captionGuardGeneration || !ytWindow || !bootstrapComplete)return;
+    forceCaptionsOff();
+  },ms));
+}
+function captionsOffPeriodic(){
+  if(!bootstrapComplete || state!==1 || !ytWindow)return;
+  if(Date.now()-lastCaptionGuardAt<12000)return;
+  lastCaptionGuardAt=Date.now();
+  forceCaptionsOff();
+}
 function applyDesiredAudio(){
   command("setVolume",[Math.max(0,Math.min(100,Number(desiredVolume)||0))]);
   command(desiredMuted?"mute":"unMute");
@@ -188,16 +199,16 @@ function goLive(delay=desiredDelaySeconds){
 function finishBootstrap(){
   if(bootstrapComplete)return;
   bootstrapComplete=true; bootstrapMuted=false;
-  forceCaptionsOff();
   applyDesiredAudio();
   if(desiredPlaying)command("playVideo"); else command("pauseVideo");
   if(pendingGoLive||isLive===true)setTimeout(()=>goLive(desiredDelaySeconds),100);
   emit("BOOTSTRAP_READY");
+  captionsOffAfterPlayback();
 }
 function attachListeners(){
   if(!ytWindow||listenSent)return;
   listenSent=true;
-  ["onReady","onStateChange","onError","onPlaybackQualityChange","onApiChange"].forEach(event=>{
+  ["onReady","onStateChange","onError","onPlaybackQualityChange"].forEach(event=>{
     ytPost({event:"command",func:"addEventListener",args:[event]});
   });
   // YouTube's iframe protocol uses this handshake for API communication.
@@ -207,7 +218,8 @@ function attachListeners(){
 function buildEmbed(id){
   currentVideoId=String(id||"").trim();
   if(!currentVideoId)return;
-  lastCaptionsOffAt=0;
+  captionGuardGeneration++;
+  lastCaptionGuardAt=0;
   ytReady=false; listenSent=false; state=-1; currentTime=0; duration=0; lastError=null;
   stateFired=false; errorFired=false; loadCalled=true; isLive=null; bootstrapMuted=false; bootstrapComplete=false; streamEnded=false; endReason=""; videoEnded=false;
   seekableStart=null;seekableEnd=null;dvrAvailable=null;delaySupported=null;
@@ -261,14 +273,8 @@ function handleYouTubeMessage(ev){
   try{if(typeof m==="string")m=JSON.parse(m)}catch(_){return}
   if(!m||typeof m!=="object")return;
 
-  if(m.event==="onApiChange"){
-    forceCaptionsOff();
-    return;
-  }
-
   if(m.event==="onReady"){
     ytReady=true;
-    forceCaptionsOff();
     emit("READY");
     requestInfo();
     return;
@@ -278,7 +284,7 @@ function handleYouTubeMessage(ev){
     ytReady=true;
     stateFired=true;
     state=Number(m.info);
-    enforceCaptionsOff();
+    if(state===1 && bootstrapComplete)captionsOffPeriodic();
     if(state===0 && isLive===true){
       streamEnded=true;
       endReason="YouTube live player entered ENDED state";
@@ -308,7 +314,6 @@ function handleYouTubeMessage(ev){
   if(m.event==="infoDelivery" && m.info){
     ytReady=true;
     const info=m.info;
-    enforceCaptionsOff();
     const vd=info.videoData;
     if(vd&&typeof vd.isLive==="boolean")isLive=vd.isLive;
     else if(vd&&typeof vd.isLiveContent==="boolean")isLive=vd.isLiveContent;
@@ -358,6 +363,7 @@ function handleYouTubeMessage(ev){
     if(Number.isFinite(Number(info.playerState))){
       const next=Number(info.playerState);
       if(next!==state){state=next;stateFired=true;emit("STATE");}
+      if(state===1 && bootstrapComplete)captionsOffPeriodic();
     }
     if(!bootstrapComplete&&duration>0)finishBootstrap();
     emit("TIME");
@@ -409,9 +415,10 @@ window.addEventListener("message",ev=>{
     // in-place instead of destroying/recreating the iframe (which produced
     // a persistent black WebRTC capture on reload).
     if(currentVideoId){
-      lastCaptionsOffAt=0;
+      captionGuardGeneration++;
+      lastCaptionGuardAt=0;
       command("loadVideoById",[currentVideoId]);
-      setTimeout(forceCaptionsOff,400);
+      captionsOffAfterPlayback();
       pendingGoLive=true;
       setTimeout(()=>{requestInfo();goLive(desiredDelaySeconds)},700);
     }
@@ -445,7 +452,7 @@ setInterval(()=>{
     attachListeners();
     requestInfo();
     if(!bootstrapComplete&&!bootstrapMuted)beginBootstrap();
-    enforceCaptionsOff();
+    captionsOffPeriodic();
   }
   emit("TIME");
 },250);
