@@ -40,6 +40,7 @@ let errorFired=false;
 let lastCommand="NONE";
 let listenSent=false;
 let isLive=null,bootstrapMuted=false,bootstrapComplete=false,streamEnded=false,endReason="",videoEnded=false;
+let pictureWidth=0,pictureHeight=0;
 let desiredVolume=100;
 let desiredMuted=false;
 let desiredPlaying=true;
@@ -126,6 +127,8 @@ function emit(type,extra={}){
       streamEnded,
       endReason,
       videoEnded,
+      pictureWidth,
+      pictureHeight,
       ...extra
     },"*");
   }catch(_){}
