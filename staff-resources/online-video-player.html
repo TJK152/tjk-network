@@ -1,0 +1,895 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>ONLINE VIDEO PLAYER</title>
+<script src="https://cdn.jsdelivr.net/npm/hls.js@1"></script>
+<style>
+:root{--blue:#004CBF;--border:#007DFF;--textblue:#0326FF}
+*{box-sizing:border-box}
+html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#000;font-family:Arial,sans-serif}
+#stage{position:fixed;inset:0 0 77px;background:#000;display:flex;align-items:center;justify-content:center}
+#youtubeHost{position:absolute;inset:0;display:none;background:#000}
+#blackBox{position:absolute;display:none;background:#000;z-index:2;pointer-events:none}
+#youtubeHost iframe{width:100%;height:100%;border:0;pointer-events:none} /* All YouTube interaction is routed through the TJK bottom bar. */
+video{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:#000}
+#message{
+ position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+ padding:30px;text-align:center;color:#fff;font-weight:700;font-size:28px;
+ background:#000;z-index:3
+}
+#message.hidden{display:none}
+#bar{
+ position:fixed;left:0;right:0;bottom:0;height:77px;padding:10px 14px;
+ display:flex;align-items:center;justify-content:center;gap:10px;
+ background:var(--blue);border-top:5px solid var(--border);color:#fff;z-index:20
+}
+.btn{
+ flex:0 0 52px;width:52px;height:52px;padding:0;
+ display:flex;align-items:center;justify-content:center;
+ border:4px solid var(--border);border-radius:10px;
+ background:#fff;color:var(--textblue);font:700 22px Arial,sans-serif;
+ cursor:pointer;user-select:none
+}
+.btn:hover{background:#0093FF;color:#fff}
+.btn:disabled{opacity:.45;cursor:default;pointer-events:none}
+.btn:disabled:hover{background:#fff;color:var(--textblue)}
+#settingsDialog{position:fixed;inset:0;z-index:115;display:none;align-items:center;justify-content:center;padding:20px;background:rgba(0,0,0,.82)}
+#settingsDialog.show{display:flex}
+#settingsCard{width:min(520px,calc(100vw - 40px));max-height:90vh;overflow:auto;padding:20px;border:5px solid var(--border);border-radius:15px;background:var(--blue);color:#fff}
+ .settingsSection{margin:18px 0 24px;font:700 15px Arial,sans-serif}
+.settingsToggleLine{display:flex;align-items:center;gap:12px;margin-top:14px}
+.settingsToggleLine input{position:absolute;opacity:0;width:1px;height:1px}
+.settingsSwitch{width:56px;height:34px;border:2px solid white;border-radius:30px;background:#808b9d;display:inline-flex;align-items:center;padding:3px;cursor:pointer;transition:background .15s}
+.settingsSwitch::before{content:"";display:block;width:22px;height:22px;border-radius:50%;background:#fff;transition:transform .15s}
+.settingsToggleLine input:checked + .settingsSwitch{background:#00aa5a}
+.settingsToggleLine input:checked + .settingsSwitch::before{transform:translateX(22px)}
+.settingsToggleLine input:focus-visible + .settingsSwitch{outline:3px solid #fff;outline-offset:3px}
+.settingsState{font-size:15px}
+.settingsFields{display:flex;gap:12px;margin-top:16px}
+.settingsFields label{display:flex;flex:1;min-width:0;flex-direction:column;gap:7px;font-size:14px;font-weight:700}
+.settingsFields input{width:100%;height:43px;min-width:0;border:5px solid var(--border);border-radius:8px;padding:6px 9px;background:white;color:#0326ff;font:700 14px Arial,sans-serif;outline:none}
+#resetBlackBox{width:100%;height:52px;margin-top:10px;border:5px solid var(--border);border-radius:9px;background:white;color:#0326ff;font:700 15px Arial,sans-serif;cursor:pointer}
+#resetBlackBox:hover{background:#0093ff;color:#fff}
+#wsStatus{font-size:12px;font-weight:700;margin-top:9px;overflow-wrap:anywhere}
+#delayDialog{position:fixed;inset:0;z-index:110;display:none;align-items:center;justify-content:center;padding:20px;background:rgba(0,0,0,.75)}
+#delayDialog.show{display:flex}
+#delayCard{width:min(360px,calc(100vw - 40px));padding:20px;border:5px solid var(--border);border-radius:15px;background:var(--blue);color:#fff;text-align:center}
+#delayTitle{font:700 22px Arial,sans-serif;margin-bottom:8px}
+#delayHint{font:700 14px Arial,sans-serif;margin-bottom:14px}
+#delaySeconds{width:100%;height:52px;border:5px solid var(--border);border-radius:9px;background:#fff;color:var(--textblue);font:700 20px Arial,sans-serif;text-align:center;outline:none}
+#delaySeconds::placeholder{color:#808080}
+#delayActions{display:flex;justify-content:center;gap:10px;margin-top:14px}
+#live{font-size:20px}
+#volumeArea{flex:0 0 540px;width:540px;display:flex;align-items:center;gap:10px}
+#volume{width:480px;flex:none;accent-color:#fff;cursor:pointer}
+#volume.muted{accent-color:#808080}
+#pct{width:46px;flex:none;text-align:right;color:#fff;font-weight:700;font-size:15px}
+
+/* TJK modal */
+#modal{
+ position:fixed;inset:0;z-index:100;display:none;align-items:center;justify-content:center;
+ padding:20px;background:rgba(0,0,0,.82)
+}
+#modal.show{display:flex}
+#modalCard{
+ width:min(680px,calc(100vw - 40px));padding:22px;
+ border:5px solid var(--border);border-radius:15px;background:var(--blue);color:#fff
+}
+#modalTitle{margin:0 0 8px;font-size:24px;font-weight:700}
+#modalText{margin:0 0 14px;font-size:15px;font-weight:700}
+#urlInput{
+ width:100%;height:52px;padding:10px 12px;border:5px solid var(--border);
+ border-radius:9px;background:#fff;color:var(--textblue);
+ font:700 16px Arial,sans-serif;outline:none
+}
+#modalActions{display:flex;justify-content:flex-end;gap:10px;margin-top:12px}
+.modalBtn{
+ min-width:120px;height:48px;padding:0 16px;border:4px solid var(--border);
+ border-radius:9px;background:#fff;color:var(--textblue);
+ font:700 15px Arial,sans-serif;cursor:pointer
+}
+.modalBtn:hover{background:#0093FF;color:#fff}
+
+:fullscreen #stage,:-webkit-full-screen #stage{bottom:0}
+:fullscreen #bar,:-webkit-full-screen #bar{display:none}
+</style>
+</head>
+<body>
+
+<div id="stage">
+  <video id="video" playsinline autoplay></video>
+  <div id="youtubeHost"></div>
+  <div id="blackBox" aria-hidden="true"></div>
+  <div id="message">Press the 🔗 button to enter a HUDL / HLS / YouTube link.</div>
+</div>
+
+<div id="bar">
+  <button class="btn" id="playPause" title="Play / Pause">Ⅱ</button>
+  <button class="btn" id="live" title="Go to live point">🔴</button>
+  <button class="btn" id="delayButton" title="Set livestream delay">⏱️</button>
+  <button class="btn" id="mute" title="Mute / Unmute">🔊</button>
+
+  <div id="volumeArea">
+    <input id="volume" type="range" min="0" max="100" value="100">
+    <span id="pct">100%</span>
+  </div>
+
+  <button class="btn" id="link" title="Enter HUDL / HLS link">🔗</button>
+  <button class="btn" id="settings" title="Settings">⚙️</button>
+  <button class="btn" id="refresh" title="Restart feed">↻</button>
+  <button class="btn" id="clear" title="Clear feed">×</button>
+  <button class="btn" id="fullscreen" title="Full screen">⛶</button>
+</div>
+
+<div id="modal">
+  <div id="modalCard">
+    <div id="modalTitle">ENTER VIDEO LINK</div>
+    <div id="modalText">Paste a direct HLS (.m3u8) link or YouTube video / livestream URL.</div>
+    <input id="urlInput" autocomplete="off" spellcheck="false" placeholder="Paste link here">
+    <div id="modalActions">
+      <button class="modalBtn" id="modalClose">CLOSE</button>
+      <button class="modalBtn" id="modalLoad">LOAD</button>
+    </div>
+  </div>
+</div>
+
+<div id="settingsDialog" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
+  <div id="settingsCard">
+    <h2 id="settingsTitle" style="margin:0 0 18px">SETTINGS</h2>
+    <div class="settingsSection">
+      <div>Bottom-Left Black Box:</div>
+      <label class="settingsToggleLine"><input type="checkbox" id="blackBoxToggle"><span class="settingsSwitch"></span><span class="settingsState" id="blackBoxState">OFF</span></label>
+      <div id="blackBoxControls" hidden>
+        <div class="settingsFields"><label>Width (px):<input id="boxWidth" type="number" min="1" max="8192" value="360"></label><label>Height (px):<input id="boxHeight" type="number" min="1" max="8192" value="200"></label></div>
+        <label style="display:block;margin:10px 0;font-weight:700">YouTube Picture Fit:<select id="youtubePictureFit" style="display:block;width:100%;margin-top:6px;padding:10px;border:4px solid var(--border);border-radius:8px;color:var(--textblue);font-weight:700"><option value="auto">AUTO (Bridge Metadata / 16:9 Fallback)</option><option value="full">FULL WIDTH (Ultrawide Feeds)</option><option value="16:9">16:9</option><option value="4:3">4:3</option></select></label>
+        <button id="resetBlackBox" type="button">RESET BLACK BOX TO 360 × 200</button>
+      </div>
+    </div>
+    <div class="settingsSection">
+      <div>Automatic Stream Ending:</div>
+      <label class="settingsToggleLine"><input type="checkbox" id="autoEndToggle"><span class="settingsSwitch"></span><span class="settingsState" id="autoEndState">OFF</span></label>
+      <div id="wsStatus" aria-live="polite" hidden>WebSocket: Off</div>
+    </div>
+    <div style="display:flex;justify-content:flex-end;margin-top:18px"><button class="modalBtn" id="settingsClose">CLOSE</button></div>
+  </div>
+</div>
+
+<div id="delayDialog" role="dialog" aria-modal="true" aria-labelledby="delayTitle">
+  <div id="delayCard">
+    <div id="delayTitle">LIVESTREAM DELAY</div>
+    <div id="delayHint">Enter delay in seconds (0 = live)</div>
+    <input id="delaySeconds" type="text" inputmode="numeric" maxlength="5" value="0" autocomplete="off" aria-label="Delay in seconds">
+    <div id="delayActions">
+      <button class="modalBtn" id="delayCancel">CANCEL</button>
+      <button class="modalBtn" id="delaySave">SET DELAY</button>
+    </div>
+  </div>
+</div>
+<script>
+"use strict";
+
+const video=document.getElementById("video");
+const youtubeHost=document.getElementById("youtubeHost");
+const message=document.getElementById("message");
+const playPause=document.getElementById("playPause");
+const liveBtn=document.getElementById("live");
+const delayInput=document.getElementById("delaySeconds");
+const delayButton=document.getElementById("delayButton");
+const delayDialog=document.getElementById("delayDialog");
+const delayCancel=document.getElementById("delayCancel");
+const delaySave=document.getElementById("delaySave");
+const muteBtn=document.getElementById("mute");
+const volume=document.getElementById("volume");
+const pct=document.getElementById("pct");
+const linkBtn=document.getElementById("link");
+const refreshBtn=document.getElementById("refresh");
+const clearBtn=document.getElementById("clear");
+const fullscreenBtn=document.getElementById("fullscreen");
+const modal=document.getElementById("modal");
+const urlInput=document.getElementById("urlInput");
+const modalClose=document.getElementById("modalClose");
+const modalLoad=document.getElementById("modalLoad");
+
+let hls=null;
+let sourceType="hls";
+// Use the existing production HTTPS bridge, which implements live-edge delay.
+const YOUTUBE_BRIDGE_URL="https://tjk152.com/youtube-bridge";
+let youtubeFrame=null;
+let youtubeReady=false;
+let youtubeBridgeLoaded=false;
+let youtubeState=-1;
+let youtubeHasPlayed=false;
+let youtubeGeneration=0;
+let youtubeMuted=false;
+let youtubeVolume=100;
+let youtubeVideoId="";
+let youtubePictureWidth=0,youtubePictureHeight=0;
+function parseYouTubeId(input){
+  try{
+    const u=new URL(input);
+    const host=u.hostname.toLowerCase().replace(/^www\./,"").replace(/^m\./,"");
+    if(host==="youtu.be")return u.pathname.split("/").filter(Boolean)[0]||"";
+    if(host==="youtube.com"||host==="youtube-nocookie.com"||host==="music.youtube.com"){
+      if(u.searchParams.get("v"))return u.searchParams.get("v");
+      const parts=u.pathname.split("/").filter(Boolean);
+      if(["live","shorts","embed","v"].includes(parts[0]))return parts[1]||"";
+    }
+  }catch(_){}
+  return "";
+}
+function bridgePost(command,extra={}){
+  if(!youtubeFrame||!youtubeFrame.contentWindow)return;
+  try{youtubeFrame.contentWindow.postMessage({tjkYoutubeBridge:true,command,...extra},"https://tjk152.com")}catch(_){}
+}
+function destroyYouTube(){
+  youtubeGeneration++;
+  youtubeReady=false;youtubeBridgeLoaded=false;youtubeState=-1;youtubeHasPlayed=false;youtubeVideoId="";youtubePictureWidth=0;youtubePictureHeight=0;
+  if(youtubeFrame){youtubeFrame.remove();youtubeFrame=null;}
+  youtubeHost.replaceChildren();youtubeHost.style.display="none";
+}
+function youtubeSeekDelay(){
+  if(sourceType!=="youtube"||!youtubeReady||mediaKind!=="live")return;
+  bridgePost("GO_LIVE",{delaySeconds:desiredDelay});
+}
+function loadYouTube(url){
+  const id=parseYouTubeId(url);
+  if(!/^[a-zA-Z0-9_-]{11}$/.test(id)){
+    resetVideo();showMessage("INVALID YOUTUBE LINK");return;
+  }
+  youtubeVideoId=id;
+  youtubeHost.style.display="block";
+  video.style.display="none";
+  youtubeFrame=document.createElement("iframe");
+  youtubeFrame.title="TJK YouTube Bridge";
+  youtubeFrame.allow="autoplay; encrypted-media; picture-in-picture; fullscreen";
+  youtubeFrame.referrerPolicy="strict-origin-when-cross-origin";
+  youtubeFrame.src=YOUTUBE_BRIDGE_URL;
+  youtubeHost.appendChild(youtubeFrame);
+}
+window.addEventListener("message",event=>{
+  if(sourceType!=="youtube"||!feedLoaded||!youtubeFrame)return;
+  if(event.origin!=="https://tjk152.com"||event.source!==youtubeFrame.contentWindow)return;
+  const m=event.data;
+  if(!m||m.tjkYoutubeBridge!==true)return;
+  if(m.type==="READY"&&!youtubeBridgeLoaded){
+    youtubeBridgeLoaded=true;
+    bridgePost("LOAD",{videoId:youtubeVideoId,delaySeconds:desiredDelay});
+    bridgePost("CAPTIONS_OFF");
+    bridgePost("SET_VOLUME",{volume:Number(volume.value)});
+    bridgePost(youtubeMuted?"MUTE":"UNMUTE");
+    return;
+  }
+  if(m.videoId&&m.videoId!==youtubeVideoId)return;
+  if(Number(m.pictureWidth)>=100&&Number(m.pictureHeight)>=100){
+    youtubePictureWidth=Number(m.pictureWidth);
+    youtubePictureHeight=Number(m.pictureHeight);
+    updateBlackBox();
+  }
+  if(m.type==="ERROR"){
+    resetVideo();showMessage("YOUTUBE VIDEO UNAVAILABLE");return;
+  }
+  if(m.type==="ENDED"||m.type==="VIDEO_ENDED"||m.streamEnded===true||m.videoEnded===true){
+    notifyStreamEnded();resetVideo();showMessage("VIDEO FEED ENDED");return;
+  }
+  if(m.playerReady===true||m.apiReady===true||m.type==="BOOTSTRAP_READY")youtubeReady=true;
+  // Some deployed bridge builds report YouTube's ended state (0) through
+  // STATE/INFO rather than an explicit ENDED event. Recognize that state too,
+  // but only after playback actually started to avoid a false startup end.
+  if(m.state!==null && m.state!==undefined && Number.isFinite(Number(m.state))){
+    youtubeState=Number(m.state);
+    if(youtubeState===1)youtubeHasPlayed=true;
+    if(youtubeState===0 && youtubeHasPlayed){
+      notifyStreamEnded();resetVideo();
+      showMessage("VIDEO FEED ENDED");
+      return;
+    }
+  }
+  if(m.isLive===true){
+    if(mediaKind!=="live")setMediaKind("live");
+  }else if(m.isLive===false){
+    if(mediaKind!=="vod")setMediaKind("vod");
+  }
+  if(m.playerReady===true||m.apiReady===true||m.type==="BOOTSTRAP_READY"||youtubeState===1)bridgePost("CAPTIONS_OFF");
+  if(youtubeState===1)hideMessage();
+  syncFeedControls();syncVolume();
+});
+// Reinforce the captions-off preference while YouTube is active.
+// The bridge must implement CAPTIONS_OFF for this command to take effect.
+setInterval(()=>{
+  if(sourceType==="youtube"&&feedLoaded&&youtubeBridgeLoaded)bridgePost("CAPTIONS_OFF");
+},3000);
+let currentUrl="";
+let feedLoaded=false;
+let mediaKind="unknown"; // live | vod | unknown
+let lastDuration=0;
+let desiredDelay=0;
+let delayPending=false;
+let delayApplied=false;
+let delayToken=0;
+let delayTimer=null;
+let lastLiveEdgeSeek=0;
+let pendingLivePosition=false;
+function seekableRange(){
+  try{const r=video.seekable;if(r&&r.length){const i=r.length-1;return {start:r.start(i),end:r.end(i)}}}catch(_){}
+  return null;
+}
+function setDelayEnabled(enabled){
+  delayButton.disabled=!enabled;
+  if(!enabled)delayDialog.classList.remove("show");
+  // VOD disables the control without modifying the saved session delay.
+  // The selected delay is retained until the page is reloaded.
+}
+function setMediaKind(kind){
+  if(kind!=="live"&&kind!=="vod")return;
+  const changed=mediaKind!==kind;
+  mediaKind=kind;
+  setDelayEnabled(kind!=="vod");
+  if(kind==="live"&&changed){delayPending=true;delayApplied=false;pendingLivePosition=true;}
+  syncFeedControls();
+}
+function seekLiveEdge(){
+  const r=seekableRange();
+  const edge=r?r.end:liveEdge();
+  if(!Number.isFinite(edge))return false;
+  try{video.currentTime=Math.max(r?r.start:0,edge-0.12);lastLiveEdgeSeek=Date.now();return true}catch(_){return false}
+}
+function positionLiveWithDelay(){
+  if(sourceType!=="hls"||!feedLoaded||mediaKind!=="live")return;
+  const r=seekableRange();
+  if(!r)return; // Wait for actual DVR history rather than guessing from duration.
+  if(pendingLivePosition){
+    if(!seekLiveEdge())return;
+    pendingLivePosition=false;
+    if(desiredDelay===0){delayPending=false;delayApplied=true;return;}
+  }
+  if(!delayPending||delayApplied)return;
+  if(desiredDelay===0){
+    seekLiveEdge();delayPending=false;delayApplied=true;return;
+  }
+  // Do not clamp to a shorter delay: wait until the requested point exists.
+  const target=r.end-desiredDelay;
+  if(target<r.start+0.2)return;
+  try{
+    video.currentTime=target;
+    delayPending=false;
+    delayApplied=true;
+  }catch(_){}
+}
+function startDelayMonitor(){
+  stopDelayMonitor();
+  const token=++delayToken;
+  delayTimer=setInterval(()=>{if(token!==delayToken)return;positionLiveWithDelay()},400);
+}
+function stopDelayMonitor(){if(delayTimer!==null){clearInterval(delayTimer);delayTimer=null}++delayToken;}
+function updateDelay(){
+  if(mediaKind==="vod"){setDelayEnabled(false);return;}
+  const raw=delayInput.value.trim();
+  const parsed=raw===""?0:Number(raw);
+  const next=Number.isFinite(parsed)?Math.max(0,Math.min(86400,Math.floor(parsed))):0;
+  delayInput.value=String(next);
+  if(next===desiredDelay && delayApplied)return;
+  desiredDelay=next;
+  delayPending=true;delayApplied=false;pendingLivePosition=true;
+  if(mediaKind==="live"){if(sourceType==="youtube")bridgePost("SET_DELAY",{delaySeconds:desiredDelay});else positionLiveWithDelay();}
+}
+// Edit delay in a compact dialog; apply only when SET DELAY is clicked.
+delayButton.onclick=()=>{
+  if(delayButton.disabled)return;
+  delayInput.value=String(desiredDelay);
+  delayDialog.classList.add("show");
+  delayInput.focus();delayInput.select();
+};
+delayCancel.onclick=()=>delayDialog.classList.remove("show");
+delayDialog.onclick=e=>{if(e.target===delayDialog)delayDialog.classList.remove("show")};
+delayInput.addEventListener("input",()=>{delayInput.value=delayInput.value.replace(/\D/g,"").slice(0,5)});
+delaySave.onclick=()=>{updateDelay();delayDialog.classList.remove("show")};
+delayInput.addEventListener("keydown",e=>{
+  if(e.key==="Enter"){e.preventDefault();delaySave.click()}
+  if(e.key==="Escape")delayDialog.classList.remove("show");
+});
+
+function showMessage(text){
+  message.textContent=text;
+  message.classList.remove("hidden");
+}
+function hideMessage(){message.classList.add("hidden")}
+
+function syncPlayButton(){
+  // Show the playing-state icon by default, including the no-feed screen.
+  // Disabled controls cannot be activated until a feed is loaded.
+  playPause.textContent=(!feedLoaded || (sourceType==="youtube" ? youtubeState!==2 : !video.paused))?"Ⅱ":"▶︎";
+}
+function syncFeedControls(){
+  playPause.disabled=!feedLoaded;
+  liveBtn.disabled=!feedLoaded || mediaKind==="vod";
+  refreshBtn.disabled=!feedLoaded;
+  delayButton.disabled=mediaKind==="vod";
+  syncPlayButton();
+}
+function syncVolume(){
+  const n=Math.round(Number(volume.value)||0);
+  pct.textContent=n+"%";
+  const muted=sourceType==="youtube"?youtubeMuted:video.muted;
+  volume.classList.toggle("muted",muted);
+  muteBtn.textContent=muted?"🔇":"🔊";
+}
+function liveEdge(){
+  try{
+    if(video.seekable && video.seekable.length){
+      return video.seekable.end(video.seekable.length-1);
+    }
+  }catch(_){}
+  return Number.isFinite(video.duration)?video.duration:null;
+}
+function detectMediaKind(){
+  // Infinity is the standard HTMLMediaElement signal for a live presentation.
+  if(video.duration===Infinity){
+    setMediaKind("live");
+    return;
+  }
+  if(Number.isFinite(video.duration) && video.duration>0){
+    lastDuration=video.duration;
+    // HLS.js level details give a stronger live/VOD signal.
+    try{
+      const d=hls && hls.levels && hls.currentLevel>=0
+        ? hls.levels[hls.currentLevel] && hls.levels[hls.currentLevel].details
+        : null;
+      if(d && typeof d.live==="boolean"){
+        setMediaKind(d.live?"live":"vod");
+        return;
+      }
+    }catch(_){}
+    // For HLS, wait for playlist metadata before declaring VOD.
+    if(mediaKind==="unknown" && !hls)setMediaKind("vod");
+  }
+}
+function destroyHls(){
+  if(hls){
+    try{hls.destroy()}catch(_){}
+    hls=null;
+  }
+}
+function resetVideo(){
+  stopDelayMonitor();
+  try{video.pause()}catch(_){}
+  destroyHls();
+  destroyYouTube();
+  video.style.display="block";
+  video.removeAttribute("src");
+  video.load();
+  feedLoaded=false;
+  mediaKind="unknown";
+  lastDuration=0;
+  // Keep the selected delay across feed changes and Clear Feed.
+  // Only a page reload resets desiredDelay to its initial zero value.
+  delayInput.value=String(desiredDelay);
+  delayPending=false;delayApplied=false;pendingLivePosition=false;
+  setDelayEnabled(true);
+  syncFeedControls();
+}
+function clearFeed(){
+  currentUrl="";
+  resetVideo();
+  showMessage("Press the 🔗 button to enter a HUDL / HLS / YouTube link.");
+}
+async function normalPlay(){
+  // Deliberately normal playback: no live-edge seek.
+  try{await video.play()}catch(_){}
+}
+async function goLive(){
+  if(sourceType==="youtube"){
+    if(youtubeBridgeLoaded)bridgePost("GO_LIVE",{delaySeconds:desiredDelay});
+    return;
+  }
+  if(mediaKind==="live"){
+    // LIVE always reacquires the current live head first. If delay is set,
+    // positionLiveWithDelay then seeks back only when the full DVR span exists.
+    delayPending=true;delayApplied=false;pendingLivePosition=true;
+    positionLiveWithDelay();
+  }else if(mediaKind!=="vod"){
+    // Feed metadata may still be arriving; keep the request pending.
+    pendingLivePosition=true;
+  }
+  try{await video.play()}catch(_){}
+}
+function loadFeed(url){
+  resetCoverBounds();
+  url=String(url||"").trim();
+  if(!url)return;
+  currentUrl=url;
+  resetVideo();
+  endingSent=false;
+  sourceType=parseYouTubeId(url)?"youtube":"hls";
+  updateBlackBox();
+  feedLoaded=true;
+  syncFeedControls();
+  hideMessage();
+  if(sourceType==="youtube"){loadYouTube(url);return;}
+  startDelayMonitor();
+
+  if(window.Hls && Hls.isSupported()){
+    hls=new Hls({
+      lowLatencyMode:true,
+      backBufferLength:180,
+      maxBufferLength:30,
+      liveSyncDurationCount:1,
+      liveMaxLatencyDurationCount:3
+    });
+
+    hls.on(Hls.Events.LEVEL_LOADED,(event,data)=>{
+      if(data && data.details && typeof data.details.live==="boolean"){
+        setMediaKind(data.details.live?"live":"vod");
+        if(data.details.live)positionLiveWithDelay();
+      }
+    });
+
+    hls.on(Hls.Events.MANIFEST_PARSED,async()=>{
+      detectMediaKind();
+      try{await video.play()}catch(_){}
+    });
+
+    hls.on(Hls.Events.ERROR,(event,data)=>{
+      if(!data || !data.fatal)return;
+
+      // If a previously-running live playlist has ended/disappeared, show end state
+      // instead of endlessly presenting a frozen frame.
+      if(mediaKind==="live"){
+        notifyStreamEnded();resetVideo();
+        showMessage("VIDEO FEED ENDED");
+        return;
+      }
+
+      if(data.type===Hls.ErrorTypes.NETWORK_ERROR){
+        try{hls.startLoad()}catch(_){}
+      }else if(data.type===Hls.ErrorTypes.MEDIA_ERROR){
+        try{hls.recoverMediaError()}catch(_){}
+      }else{
+        resetVideo();
+        showMessage("VIDEO FEED ENDED");
+      }
+    });
+
+    hls.loadSource(url);
+    hls.attachMedia(video);
+    return;
+  }
+
+  if(video.canPlayType("application/vnd.apple.mpegurl")){
+    video.src=url;
+    video.addEventListener("loadedmetadata",()=>{
+      detectMediaKind();
+      normalPlay();
+    },{once:true});
+    return;
+  }
+
+  resetVideo();
+  showMessage("HLS PLAYBACK NOT SUPPORTED");
+}
+
+playPause.onclick=async()=>{
+  if(!feedLoaded)return;
+  if(sourceType==="youtube"){
+    if(!youtubeBridgeLoaded)return;
+    bridgePost(youtubeState===2?"PLAY":"PAUSE");
+    return;
+  }
+  if(video.paused)await normalPlay();
+  else video.pause();
+};
+
+liveBtn.onclick=async()=>{
+  if(!feedLoaded || mediaKind==="vod")return;
+  await goLive();
+};
+
+muteBtn.onclick=()=>{
+  if(sourceType==="youtube"){
+    youtubeMuted=!youtubeMuted;
+    if(youtubeBridgeLoaded)bridgePost(youtubeMuted?"MUTE":"UNMUTE");
+  }else video.muted=!video.muted;
+  syncVolume();
+};
+
+volume.oninput=()=>{
+  video.volume=Math.max(0,Math.min(1,Number(volume.value)/100));
+  youtubeVolume=Number(volume.value);
+  if(sourceType==="youtube"&&youtubeBridgeLoaded)bridgePost("SET_VOLUME",{volume:youtubeVolume});
+  // Keep mute state unchanged. Slider remains adjustable while muted.
+  syncVolume();
+};
+
+function openModal(){
+  urlInput.value=currentUrl;
+  modal.classList.add("show");
+  setTimeout(()=>{urlInput.focus();urlInput.select()},0);
+}
+function closeModal(){
+  modal.classList.remove("show");
+  if(!feedLoaded)showMessage("Press the 🔗 button to enter a HUDL / HLS / YouTube link.");
+}
+
+linkBtn.onclick=openModal;
+modalClose.onclick=closeModal;
+modal.onclick=e=>{if(e.target===modal)closeModal()};
+modalLoad.onclick=()=>{
+  const url=urlInput.value.trim();
+  if(!url)return;
+  modal.classList.remove("show");
+  loadFeed(url);
+};
+urlInput.addEventListener("keydown",e=>{
+  if(e.key==="Enter")modalLoad.click();
+  if(e.key==="Escape")closeModal();
+});
+
+refreshBtn.onclick=()=>{
+  if(!currentUrl)return;
+  const url=currentUrl;
+  loadFeed(url);
+};
+
+clearBtn.onclick=clearFeed;
+
+async function toggleFullscreen(){
+  try{
+    if(document.fullscreenElement || document.webkitFullscreenElement){
+      if(document.exitFullscreen)await document.exitFullscreen();
+      else if(document.webkitExitFullscreen)document.webkitExitFullscreen();
+      return;
+    }
+    const el=document.documentElement;
+    if(el.requestFullscreen){
+      await el.requestFullscreen();
+      return;
+    }
+    if(el.webkitRequestFullscreen){
+      el.webkitRequestFullscreen();
+      return;
+    }
+  }catch(err){
+    console.warn("Wix iframe blocked fullscreen:",err);
+  }
+
+  // Wix fallback: open the player itself and carry the active feed with it.
+  try{
+    const u=new URL(window.location.href);
+    if(currentUrl){
+      u.searchParams.set("feed",currentUrl);
+      u.searchParams.set("standalone","1");
+    }
+    window.open(u.toString(),"_blank");
+  }catch(err){
+    console.warn("Standalone video fallback:",err);
+  }
+}
+fullscreenBtn.onclick=toggleFullscreen;
+
+video.addEventListener("play",syncPlayButton);
+video.addEventListener("pause",syncPlayButton);
+video.addEventListener("loadedmetadata",detectMediaKind);
+video.addEventListener("durationchange",detectMediaKind);
+video.addEventListener("progress",positionLiveWithDelay);
+video.addEventListener("seeked",positionLiveWithDelay);
+
+video.addEventListener("ended",()=>{
+  // Native ended normally means finite VOD. Live termination is handled above.
+  notifyStreamEnded();resetVideo();
+  showMessage("VIDEO FEED ENDED");
+});
+
+// TJK SETTINGS: independent of playback state; saved locally in this browser.
+const settingsBtn=document.getElementById("settings");
+const settingsDialog=document.getElementById("settingsDialog");
+const settingsClose=document.getElementById("settingsClose");
+const autoEndToggle=document.getElementById("autoEndToggle");
+const blackBoxToggle=document.getElementById("blackBoxToggle");
+const blackBox=document.getElementById("blackBox");
+const WS_URL="ws://127.0.0.1:4455";
+const wsStatus=document.getElementById("wsStatus");
+const boxFields=["boxWidth","boxHeight"].map(id=>document.getElementById(id));
+const blackBoxControls=document.getElementById("blackBoxControls");
+const youtubePictureFit=document.getElementById("youtubePictureFit");
+const resetBlackBox=document.getElementById("resetBlackBox");
+const SETTINGS_KEY="tjk-online-video-player-settings-v1";
+const WS_PASSWORD="tjknetwork152";
+let ws=null,wsReady=false,wsReconnect=null,wsSerial=0,endingSent=false;
+let savedSettings={};
+try{savedSettings=JSON.parse(localStorage.getItem(SETTINGS_KEY)||"{}")}catch(_){}
+// Session safety: both optional features start OFF on every page load.
+// Preserve picture-fit and dimensions, but never restore active toggles.
+autoEndToggle.checked=false;
+blackBoxToggle.checked=false;
+youtubePictureFit.value=["auto","full","16:9","4:3"].includes(savedSettings.youtubePictureFit)?savedSettings.youtubePictureFit:"auto";
+
+boxFields.forEach(el=>{if(Number.isFinite(+savedSettings[el.id])&&+savedSettings[el.id]>0)el.value=savedSettings[el.id]});
+function persistSettings(){
+  try{localStorage.setItem(SETTINGS_KEY,JSON.stringify({autoEnd:autoEndToggle.checked,blackBox:blackBoxToggle.checked,youtubePictureFit:youtubePictureFit.value,...Object.fromEntries(boxFields.map(el=>[el.id,Number(el.value)]))}))}catch(_){}
+}
+// Beta Lab v58 fixed cover: object-fit video rectangle, encoded-black-bar
+// detection, stable bounds confirmation and uniform 1920-reference scaling.
+const coverFrameCanvas=document.createElement("canvas");
+coverFrameCanvas.width=192;coverFrameCanvas.height=144;
+const coverFrameCtx=coverFrameCanvas.getContext("2d",{willReadFrequently:true});
+let coverActiveBounds={top:0,bottom:1},coverBoundsCandidate=null,coverBoundsStable=0;
+function resetCoverBounds(){
+  coverActiveBounds={top:0,bottom:1};coverBoundsCandidate=null;coverBoundsStable=0;
+}
+function measureCoverActiveBounds(){
+  if(sourceType!=="hls"||!video.videoWidth||video.readyState<2||!coverFrameCtx)return;
+  try{
+    coverFrameCtx.drawImage(video,0,0,192,144);
+    const data=coverFrameCtx.getImageData(0,0,192,144).data,dark=[];
+    for(let y=0;y<144;y++){
+      let nearBlack=0,samples=0;
+      for(let x=8;x<184;x+=4){
+        const i=(y*192+x)*4;
+        if(Math.max(data[i],data[i+1],data[i+2])<30)nearBlack++;
+        samples++;
+      }
+      dark[y]=nearBlack/samples>=.96;
+    }
+    let first=0,last=143;
+    while(first<55&&dark[first])first++;
+    while(last>88&&dark[last])last--;
+    const candidate={top:first>=3?(first-1)/144:0,bottom:last<=140?(last+2)/144:1};
+    if(candidate.bottom-candidate.top<.45)return;
+    if(coverBoundsCandidate&&Math.abs(candidate.top-coverBoundsCandidate.top)<.015&&Math.abs(candidate.bottom-coverBoundsCandidate.bottom)<.015)coverBoundsStable++;
+    else{coverBoundsCandidate=candidate;coverBoundsStable=1;}
+    if(coverBoundsStable>=3)coverActiveBounds=candidate;
+  }catch(_){
+    // CORS-restricted streams cannot be sampled; preserve Beta Lab fallback.
+    coverActiveBounds={top:0,bottom:1};
+  }
+}
+function actualCoverVideoRect(){
+  const stage=document.getElementById("stage");
+  const parent=stage.getBoundingClientRect();
+  if(sourceType==="youtube"){
+    // Use bridge-reported native dimensions when available. YouTube does not
+    // guarantee this metadata, so provide a user-selectable fallback.
+    const r=youtubeHost.getBoundingClientRect();
+    const fit=youtubePictureFit.value;
+    const aspect=fit==="full"?null:fit==="4:3"?4/3:fit==="16:9"?16/9:
+      (youtubePictureWidth>0&&youtubePictureHeight>0?youtubePictureWidth/youtubePictureHeight:16/9);
+    if(!aspect)return {left:r.left-parent.left,top:r.top-parent.top,width:r.width,height:r.height};
+    const width=Math.min(r.width,r.height*aspect),height=Math.min(r.height,r.width/aspect);
+    return {left:r.left-parent.left+(r.width-width)/2,
+      top:r.top-parent.top+(r.height-height)/2,width,height};
+  }
+  const r=video.getBoundingClientRect();
+  const W=video.videoWidth||1920,H=video.videoHeight||1080;
+  const scale=Math.min(r.width/W,r.height/H);
+  return {left:r.left-parent.left+(r.width-W*scale)/2,
+    top:r.top-parent.top+(r.height-H*scale)/2,width:W*scale,height:H*scale};
+}
+function updateBlackBox(){
+  if(!blackBoxToggle.checked||!feedLoaded||(sourceType==="hls"&&!video.videoWidth)){
+    blackBox.style.display="none";return;
+  }
+  const v=actualCoverVideoRect();
+  if(!v.width||!v.height){blackBox.style.display="none";return;}
+  const widthReference=Math.max(1,Math.min(1920,Number(boxFields[0].value)||360));
+  const heightReference=Math.max(1,Math.min(1080,Number(boxFields[1].value)||200));
+  const pictureBottom=v.top+(sourceType==="hls"?coverActiveBounds.bottom:1)*v.height;
+  const boxW=widthReference*v.width/1920;
+  const boxH=heightReference*v.width/1920;
+  const left=Math.round(v.left),bottom=Math.round(pictureBottom);
+  const top=Math.round(bottom-boxH);
+  blackBox.style.left=left+"px";
+  blackBox.style.top=top+"px";
+  blackBox.style.bottom="auto";
+  blackBox.style.width=Math.max(1,Math.round(boxW))+"px";
+  blackBox.style.height=Math.max(1,bottom-top+3)+"px"; // v58 seam overlap
+  blackBox.style.display="block";
+}
+setInterval(()=>{
+  if(blackBoxToggle.checked){measureCoverActiveBounds();updateBlackBox();}
+},500);
+function syncSettingsUI(){
+  blackBoxControls.hidden=!blackBoxToggle.checked;
+  document.getElementById("blackBoxState").textContent=blackBoxToggle.checked?"ON":"OFF";
+  document.getElementById("autoEndState").textContent=autoEndToggle.checked?"ON":"OFF";
+  wsStatus.hidden=!autoEndToggle.checked;
+}
+settingsBtn.onclick=()=>{settingsDialog.classList.add("show");syncSettingsUI();updateBlackBox()};
+settingsClose.onclick=()=>settingsDialog.classList.remove("show");
+settingsDialog.onclick=e=>{if(e.target===settingsDialog)settingsDialog.classList.remove("show")};
+window.addEventListener("keydown",e=>{if(e.key==="Escape")settingsDialog.classList.remove("show")});
+window.addEventListener("resize",updateBlackBox);
+video.addEventListener("loadedmetadata",()=>{resetCoverBounds();updateBlackBox()});
+window.addEventListener("fullscreenchange",()=>requestAnimationFrame(updateBlackBox));
+if(typeof ResizeObserver!=="undefined")new ResizeObserver(updateBlackBox).observe(document.getElementById("stage"));
+youtubePictureFit.onchange=()=>{persistSettings();updateBlackBox()};
+blackBoxToggle.onchange=()=>{if(blackBoxToggle.checked)resetCoverBounds();persistSettings();syncSettingsUI();updateBlackBox()};
+resetBlackBox.onclick=()=>{boxFields[0].value="360";boxFields[1].value="200";persistSettings();updateBlackBox()};
+boxFields.forEach(el=>el.addEventListener("input",()=>{persistSettings();updateBlackBox()}));
+function setWsStatus(t){wsStatus.textContent="WebSocket: "+t}
+function closeWebsocket(){
+  ++wsSerial;wsReady=false;
+  if(wsReconnect!==null){clearTimeout(wsReconnect);wsReconnect=null}
+  if(ws){const old=ws;ws=null;try{old.close()}catch(_){}}
+}
+async function obsHash(input){
+  const bytes=new TextEncoder().encode(input);
+  const digest=await crypto.subtle.digest("SHA-256",bytes);
+  return btoa(String.fromCharCode(...new Uint8Array(digest)));
+}
+function scheduleWsReconnect(serial){
+  if(serial!==wsSerial||!autoEndToggle.checked||wsReconnect!==null)return;
+  wsReconnect=setTimeout(()=>{wsReconnect=null;connectWebsocket()},3000);
+}
+function connectWebsocket(){
+  closeWebsocket();
+  if(!autoEndToggle.checked){setWsStatus("Off");return}
+  const serial=wsSerial;
+  let url=WS_URL;
+  if(!/^wss?:\/\//i.test(url)){setWsStatus("Invalid URL");return}
+  setWsStatus("Connecting…");
+  try{ws=new WebSocket(url)}catch(err){setWsStatus("Connection failed: "+err.message);scheduleWsReconnect(serial);return}
+  const socket=ws;
+  socket.onmessage=async e=>{
+    if(serial!==wsSerial)return;
+    let m;try{m=JSON.parse(e.data)}catch(_){return}
+    if(m.op===0){
+      try{
+        const identify={rpcVersion:1,eventSubscriptions:0};
+        const a=m.d&&m.d.authentication;
+        if(a){const secret=await obsHash(WS_PASSWORD+a.salt);identify.authentication=await obsHash(secret+a.challenge)}
+        if(serial===wsSerial&&socket.readyState===1)socket.send(JSON.stringify({op:1,d:identify}));
+      }catch(err){setWsStatus("Authentication unavailable: "+err.message)}
+    }else if(m.op===2){wsReady=true;setWsStatus("Connected")}
+    else if(m.op===7&&m.d&&String(m.d.requestId||"").startsWith("tjk-ending-")){
+      setWsStatus(m.d.requestStatus?.result
+        ? "Stream Ending Accepted By OBS."
+        : "OBS rejected: "+(m.d.requestStatus?.comment||"unknown"));
+    }
+  };
+  socket.onclose=()=>{if(serial!==wsSerial)return;wsReady=false;setWsStatus("Disconnected — retrying");scheduleWsReconnect(serial)};
+  socket.onerror=()=>{if(serial===wsSerial)setWsStatus("Connection error")};
+}
+function notifyStreamEnded(){
+  if(endingSent||!feedLoaded)return;
+  endingSent=true;
+  if(!autoEndToggle.checked)return;
+  if(!wsReady||!ws||ws.readyState!==1){setWsStatus("End detected, but not connected");return}
+  try{
+    // Exact working v58 Beta Lab protocol: Advanced Scene Switcher vendor request.
+    ws.send(JSON.stringify({op:6,d:{
+      requestType:"CallVendorRequest",
+      requestId:"tjk-ending-"+Date.now(),
+      requestData:{
+        vendorName:"AdvancedSceneSwitcher",
+        requestType:"AdvancedSceneSwitcherMessage",
+        requestData:{message:"Stream Ending"}
+      }
+    }}));
+    setWsStatus("Sending Stream Ending to Advanced Scene Switcher…")
+  }catch(err){setWsStatus("Send failed: "+err.message)}
+}
+autoEndToggle.onchange=()=>{persistSettings();syncSettingsUI();connectWebsocket()};
+syncSettingsUI();
+updateBlackBox();
+if(autoEndToggle.checked)connectWebsocket();
+
+video.volume=1;
+video.muted=false;
+syncFeedControls();
+syncVolume();
+
+let handedOffFeed="";
+try{
+  const q=new URLSearchParams(window.location.search||"");
+  if(q.get("standalone")==="1")handedOffFeed=String(q.get("feed")||"").trim();
+}catch(_){}
+
+if(handedOffFeed){
+  loadFeed(handedOffFeed);
+}else{
+  showMessage("Press the 🔗 button to enter a HUDL / HLS / YouTube link.");
+}
+</script>
+</body>
+</html>
