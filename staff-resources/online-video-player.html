@@ -11,6 +11,8 @@
 html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#000;font-family:Arial,sans-serif}
 #stage{position:fixed;inset:0 0 77px;background:#000;display:flex;align-items:center;justify-content:center}
 #youtubeHost{position:absolute;inset:0;display:none;background:#000}
+/* Waiting/scheduled YouTube previews use a centered 16:9 viewport. */
+#youtubeHost.tjk-preview-fit{inset:auto;left:50%;top:50%;transform:translate(-50%,-50%)}
 #blackBox{position:absolute;display:none;background:#000;z-index:2;pointer-events:none}
 #youtubeHost iframe{width:100%;height:100%;border:0;pointer-events:none} /* All YouTube interaction is routed through the TJK bottom bar. */
 video{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:#000}
@@ -206,6 +208,22 @@ let youtubeMuted=false;
 let youtubeVolume=100;
 let youtubeVideoId="";
 let youtubePictureWidth=0,youtubePictureHeight=0;
+// Scheduled YouTube streams show a thumbnail before playback starts. Keep
+// its iframe at 16:9 only in that state; restore full stage once playing.
+function syncYouTubePreviewFit(){
+  const preview=sourceType==="youtube"&&feedLoaded&&!youtubeHasPlayed&&youtubeState!==1;
+  youtubeHost.classList.toggle("tjk-preview-fit",preview);
+  if(preview){
+    const r=document.getElementById("stage").getBoundingClientRect();
+    const w=Math.min(r.width,r.height*16/9),h=w*9/16;
+    youtubeHost.style.width=w+"px";
+    youtubeHost.style.height=h+"px";
+  }else{
+    youtubeHost.style.width="";
+    youtubeHost.style.height="";
+  }
+  updateBlackBox();
+}
 function parseYouTubeId(input){
   try{
     const u=new URL(input);
@@ -227,7 +245,7 @@ function destroyYouTube(){
   youtubeGeneration++;
   youtubeReady=false;youtubeBridgeLoaded=false;youtubeState=-1;youtubeHasPlayed=false;youtubeVideoId="";youtubePictureWidth=0;youtubePictureHeight=0;
   if(youtubeFrame){youtubeFrame.remove();youtubeFrame=null;}
-  youtubeHost.replaceChildren();youtubeHost.style.display="none";
+  youtubeHost.replaceChildren();youtubeHost.style.display="none";youtubeHost.classList.remove("tjk-preview-fit");youtubeHost.style.width="";youtubeHost.style.height="";
 }
 function youtubeSeekDelay(){
   if(sourceType!=="youtube"||!youtubeReady||mediaKind!=="live")return;
@@ -247,6 +265,7 @@ function loadYouTube(url){
   youtubeFrame.referrerPolicy="strict-origin-when-cross-origin";
   youtubeFrame.src=YOUTUBE_BRIDGE_URL;
   youtubeHost.appendChild(youtubeFrame);
+  syncYouTubePreviewFit();
 }
 window.addEventListener("message",event=>{
   if(sourceType!=="youtube"||!feedLoaded||!youtubeFrame)return;
@@ -280,6 +299,7 @@ window.addEventListener("message",event=>{
   if(m.state!==null && m.state!==undefined && Number.isFinite(Number(m.state))){
     youtubeState=Number(m.state);
     if(youtubeState===1)youtubeHasPlayed=true;
+    syncYouTubePreviewFit();
     if(youtubeState===0 && youtubeHasPlayed){
       notifyStreamEnded();resetVideo();
       showMessage("VIDEO FEED ENDED");
@@ -798,9 +818,9 @@ settingsBtn.onclick=()=>{settingsDialog.classList.add("show");syncSettingsUI();u
 settingsClose.onclick=()=>settingsDialog.classList.remove("show");
 settingsDialog.onclick=e=>{if(e.target===settingsDialog)settingsDialog.classList.remove("show")};
 window.addEventListener("keydown",e=>{if(e.key==="Escape")settingsDialog.classList.remove("show")});
-window.addEventListener("resize",updateBlackBox);
+window.addEventListener("resize",()=>{syncYouTubePreviewFit();updateBlackBox()});
 video.addEventListener("loadedmetadata",()=>{resetCoverBounds();updateBlackBox()});
-window.addEventListener("fullscreenchange",()=>requestAnimationFrame(updateBlackBox));
+window.addEventListener("fullscreenchange",()=>requestAnimationFrame(()=>{syncYouTubePreviewFit();updateBlackBox()}));
 if(typeof ResizeObserver!=="undefined")new ResizeObserver(updateBlackBox).observe(document.getElementById("stage"));
 youtubePictureFit.onchange=()=>{persistSettings();updateBlackBox()};
 blackBoxToggle.onchange=()=>{if(blackBoxToggle.checked)resetCoverBounds();persistSettings();syncSettingsUI();updateBlackBox()};
